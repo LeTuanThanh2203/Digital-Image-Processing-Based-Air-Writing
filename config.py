@@ -13,7 +13,13 @@ HSV_UPPER = (20, 255, 255)
 # Kích thước kernel cho Morphological operations
 MORPH_KERNEL_SIZE = (5, 5)
 
-# --- MediaPipe Tracking Configuration ---
+# --- MediaPipe Tracking & ROI Configuration ---
+# Bật/tắt chế độ dùng ROI (Cắt ảnh theo mask DIP trước khi đưa vào MediaPipe)
+USE_ROI_MODE = True
+
+# Padding cho Bounding Box (pixel) để đảm bảo không bị cắt mất ngón tay
+ROI_PADDING = 30
+
 # Khoảng cách tối đa (pixels) giữa ngón cái (Thumb) và ngón trỏ (Index) để được tính là "Pinch" (Đang viết)
 PINCH_THRESHOLD = 40
 
