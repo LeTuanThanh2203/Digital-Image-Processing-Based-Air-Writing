@@ -1,0 +1,17 @@
+[project]
+name = "digital-image-processing-based-air-writing-trajectory-extraction-and-handwriting-reconstruction"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Lê Tuấn Thành", email = "tuanthanhlvq413@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+digital-image-processing-based-air-writing-trajectory-extraction-and-handwriting-reconstruction = "digital_image_processing_based_air_writing_trajectory_extraction_and_handwriting_reconstruction:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
