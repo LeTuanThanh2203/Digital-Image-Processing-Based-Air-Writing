@@ -22,10 +22,13 @@ class GestureStabilizer:
     """
     Lớp ổn định cử chỉ bàn tay bằng majority voting trong cửa sổ N frames liên tiếp.
     Giúp chống nhiễu / jitter do MediaPipe nhận sai 1-2 frame lẻ.
+    Khi không có đa số rõ ràng, giữ nguyên gesture ổn định trước đó (sticky)
+    thay vì chuyển theo gesture thô mới nhất (tránh giật khi rút tay).
     """
     def __init__(self, window_size=5):
         self.window_size = window_size
         self.history = deque(maxlen=window_size)
+        self.last_stable = "IDLE"   # Giữ gesture ổn định cuối cùng
 
     def update(self, raw_gesture: str) -> str:
         self.history.append(raw_gesture)
@@ -35,11 +38,14 @@ class GestureStabilizer:
         most_common, count = counts.most_common(1)[0]
         # Cần đa số trong cửa sổ để chốt gesture
         if count >= (len(self.history) // 2 + 1):
+            self.last_stable = most_common
             return most_common
-        return self.history[-1]
+        # Không có đa số: giữ gesture ổn định trước đó thay vì jitter theo raw mới nhất
+        return self.last_stable
 
     def reset(self):
         self.history.clear()
+        self.last_stable = "IDLE"
 
 
 def classify_hand_gesture(hand_landmarks) -> str:
@@ -50,10 +56,6 @@ def classify_hand_gesture(hand_landmarks) -> str:
     3. DELETE: Tất cả 4 ngón trỏ/giữa/áp út/út co (CLOSED - Nắm tay).
     4. MODE: Ngón trỏ & ngón giữa duỗi (OPEN), ngón áp út & út co (CLOSED - V-Sign).
     """
-    # 8: Index tip, 6: Index PIP
-    # 12: Middle tip, 10: Middle PIP
-    # 16: Ring tip, 14: Ring PIP
-    # 20: Pinky tip, 18: Pinky PIP
     index_open = hand_landmarks[8].y < hand_landmarks[6].y
     middle_open = hand_landmarks[12].y < hand_landmarks[10].y
     ring_open = hand_landmarks[16].y < hand_landmarks[14].y
@@ -113,24 +115,30 @@ class HandTracker:
             for hand_landmarks in results.hand_landmarks:
                 h, w, _ = frame.shape
                 
-                # Vẽ các đường nối skeleton
+                # 1. Anti-aliased hand skeleton connections
                 for connection in HAND_CONNECTIONS:
                     pt1 = hand_landmarks[connection[0]]
                     pt2 = hand_landmarks[connection[1]]
                     x1, y1 = int(pt1.x * w), int(pt1.y * h)
                     x2, y2 = int(pt2.x * w), int(pt2.y * h)
-                    cv2.line(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                    cv2.line(frame, (x1, y1), (x2, y2), (235, 235, 235), 2, cv2.LINE_AA)
                 
-                # Vẽ các điểm landmark
+                # 2. Anti-aliased landmark joints
                 for landmark in hand_landmarks:
                     x = int(landmark.x * w)
                     y = int(landmark.y * h)
-                    cv2.circle(frame, (x, y), 3, (0, 0, 255), -1)
+                    cv2.circle(frame, (x, y), 3, (255, 200, 0), -1, cv2.LINE_AA)
                 
-                # Điểm 8 là đầu ngón trỏ
+                # 3. Index Fingertip #8 (Sub-pixel float precision)
                 lm8 = hand_landmarks[8]
-                px8, py8 = int(lm8.x * w), int(lm8.y * h)
+                px8, py8 = float(lm8.x * w), float(lm8.y * h)
                 fingertip_pos = (px8, py8)
+
+                # Glowing target marker on index fingertip (convert to int only for drawing)
+                px8_i, py8_i = int(round(px8)), int(round(py8))
+                cv2.circle(frame, (px8_i, py8_i), 10, (0, 255, 255), 2, cv2.LINE_AA)
+                cv2.circle(frame, (px8_i, py8_i), 4, (0, 0, 255), -1, cv2.LINE_AA)
+
                 
                 # Phân loại gesture thô từ landmarks
                 raw_gesture = classify_hand_gesture(hand_landmarks)

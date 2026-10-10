@@ -215,53 +215,106 @@ class CharacterClassifier:
         
         return tensor, resized
 
-    def predict(self, input_data: np.ndarray, mode: Optional[str] = None, confidence_threshold: float = 40.0) -> Tuple[Optional[str], float]:
+    def predict(
+        self,
+        input_data: np.ndarray,
+        mode: Optional[str] = None,
+        confidence_threshold: float = 40.0,
+        traj_stats: Optional[dict] = None
+    ) -> Tuple[Optional[str], float, dict]:
         """
-        Dự đoán chữ cái từ ảnh Canvas hoặc ảnh 64x64 nhị phân.
+        Dự đoán chữ cái từ ảnh Canvas hoặc ảnh 64x64 nhị phân kèm thông tin kiểm định đa tín hiệu (Multi-Signal Validation).
         
         Trả về:
-            - character: Ký tự được dự đoán ('A'-'Z', '0'-'9') hoặc None nếu rỗng / dưới ngưỡng tin cậy.
-            - confidence: Độ tin cậy dưới dạng phần trăm (ví dụ: 96.72).
+            - character: Ký tự được dự đoán ('A'-'Z', '0'-'9'), "UNKNOWN" nếu bị từ chối do dị dạng nghiêm trọng, hoặc None nếu rỗng.
+            - confidence: Độ tin cậy Top-1 phần trăm (ví dụ: 96.72).
+            - info_dict: Dict chứa chi tiết (top1_char, top1_conf, top2_char, top2_conf, margin, is_unknown, reject_reason).
         """
         tensor, _ = self.preprocess(input_data)
         
+        default_info = {
+            'top1_char': None, 'top1_conf': 0.0,
+            'top2_char': None, 'top2_conf': 0.0,
+            'margin': 0.0, 'is_unknown': False,
+            'reject_reason': None
+        }
+
         if tensor is None:
-            return None, 0.0
+            return None, 0.0, default_info
             
         try:
             # 1. Chạy dự đoán từ CNN model
             preds = self.model.predict(tensor, verbose=0)[0]
             
-            # 2. Lọc theo mode nếu mode được truyền vào ("LETTER" hoặc "NUMBER")
+            # 2. Sắp xếp thứ tự xác suất dự đoán giảm dần
+            sorted_indices = np.argsort(preds)[::-1]
+
+            # 3. Lọc danh sách phân lớp theo mode ("LETTER" hoặc "NUMBER")
             if mode is not None and len(self.class_labels) > 0:
                 if mode == "LETTER":
-                    valid_indices = [i for i, lbl in enumerate(self.class_labels) if lbl.isalpha()]
+                    valid_indices = [i for i in sorted_indices if self.class_labels[i].isalpha()]
                 elif mode == "NUMBER":
-                    valid_indices = [i for i, lbl in enumerate(self.class_labels) if lbl.isdigit()]
+                    valid_indices = [i for i in sorted_indices if self.class_labels[i].isdigit()]
                 else:
-                    valid_indices = list(range(len(self.class_labels)))
-                
-                if valid_indices:
-                    sub_preds = preds[valid_indices]
-                    best_sub_idx = int(np.argmax(sub_preds))
-                    class_idx = valid_indices[best_sub_idx]
-                else:
-                    class_idx = int(np.argmax(preds))
+                    valid_indices = list(sorted_indices)
             else:
-                class_idx = int(np.argmax(preds))
-            
-            # 3. Tính độ tin cậy phần trăm
-            confidence = round(float(preds[class_idx]) * 100.0, 2)
-            
-            # 4. Kiểm tra ngưỡng tin cậy (Confidence Threshold)
-            if confidence < confidence_threshold:
-                print(f"[CNN Classifier] Discarded low confidence prediction: '{self.class_labels[class_idx]}' ({confidence:.2f}% < threshold {confidence_threshold}%)")
-                return None, confidence
+                valid_indices = list(sorted_indices)
 
-            character = self.class_labels[class_idx] if class_idx < len(self.class_labels) else str(class_idx)
-            return character, confidence
+            if not valid_indices:
+                valid_indices = list(sorted_indices)
+
+            # 4. Trích xuất Top-1 và Top-2
+            top1_idx = valid_indices[0]
+            top2_idx = valid_indices[1] if len(valid_indices) > 1 else top1_idx
+
+            top1_char = self.class_labels[top1_idx] if top1_idx < len(self.class_labels) else str(top1_idx)
+            top2_char = self.class_labels[top2_idx] if top2_idx < len(self.class_labels) else str(top2_idx)
+
+            top1_conf = round(float(preds[top1_idx]) * 100.0, 2)
+            top2_conf = round(float(preds[top2_idx]) * 100.0, 2)
+            margin = round(top1_conf - top2_conf, 2)
+
+            info = {
+                'top1_char': top1_char,
+                'top1_conf': top1_conf,
+                'top2_char': top2_char,
+                'top2_conf': top2_conf,
+                'margin': margin,
+                'is_unknown': False,
+                'reject_reason': None
+            }
+
+            # 5. Kiểm tra Holistic Multi-Signal Validation (Đánh giá đa tín hiệu)
+            # Chỉ coi là UNKNOWN khi CÓ SỰ KẾT HỢP giữa dị dạng hình học/tracking nghiêm trọng VÀ độ nghi ngờ dự đoán.
+            is_severe_anomaly = False
+            reason = None
+
+            if traj_stats is not None:
+                ratio_jump = traj_stats.get('ratio_max_to_median', 1.0)
+                aspect_ratio = traj_stats.get('aspect_ratio', 1.0)
+
+                # Cờ bất thường nghiêm trọng: Jump cực lớn (> 12x median) hoặc vệt kéo dài biến dạng (> 8.0 aspect ratio)
+                if ratio_jump > 12.0 and (margin < 30.0 or top1_conf < 50.0):
+                    is_severe_anomaly = True
+                    reason = f"Extreme tracking jump glitch (ratio={ratio_jump:.1f}x > 12x)"
+                elif aspect_ratio > 8.0 and (margin < 30.0 or top1_conf < 50.0):
+                    is_severe_anomaly = True
+                    reason = f"Extreme aspect ratio distortion ({aspect_ratio:.1f} > 8.0)"
+
+            # Kiểm tra thêm ngưỡng tin cậy cơ bản
+            if top1_conf < confidence_threshold:
+                is_severe_anomaly = True
+                reason = f"Low confidence ({top1_conf:.1f}% < threshold {confidence_threshold}%)"
+
+            if is_severe_anomaly:
+                info['is_unknown'] = True
+                info['reject_reason'] = reason
+                return "UNKNOWN", top1_conf, info
+
+            return top1_char, top1_conf, info
 
         except Exception as e:
             print(f"[CNN Classifier Error] Lỗi trong quá trình predict: {e}")
-            return None, 0.0
+            return None, 0.0, default_info
+
 

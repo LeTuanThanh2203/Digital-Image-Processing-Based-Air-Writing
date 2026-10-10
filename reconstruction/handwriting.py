@@ -24,13 +24,17 @@ class HandwritingCanvas:
         return canvas
         
     def update_canvas(self, smoothed_strokes):
-        """Vẽ lại toàn bộ nét chữ lên canvas."""
+        """Vẽ toàn bộ nét chữ lên canvas với đường nét mượt chống răng cưa."""
         self.canvas = self._create_blank_canvas()
+        if not smoothed_strokes:
+            return
         for stroke in smoothed_strokes:
             for i in range(1, len(stroke)):
-                pt1 = stroke[i - 1]
-                pt2 = stroke[i]
-                cv2.line(self.canvas, pt1, pt2, self.draw_color, self.thickness)
+                pt1 = (int(round(float(stroke[i - 1][0]))), int(round(float(stroke[i - 1][1]))))
+                pt2 = (int(round(float(stroke[i][0]))), int(round(float(stroke[i][1]))))
+                cv2.line(self.canvas, pt1, pt2, self.draw_color, self.thickness, cv2.LINE_AA)
+
+
                 
     def get_canvas(self):
         return self.canvas

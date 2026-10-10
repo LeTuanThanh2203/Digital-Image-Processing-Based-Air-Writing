@@ -27,6 +27,7 @@ DRAWING_THICKNESS = 8             # Độ dày nét chữ (tăng từ 5 -> 8px c
 GESTURE_STABILIZATION_FRAMES = 5   # Majority-vote window to stabilize gestures
 PENDING_DURATION = 1.0             # Seconds to wait after stopping writing before CNN fires
 SPACE_HOLD_FRAMES = 15             # Consecutive frames SPACE gesture must be held (~0.5s at 30fps)
+DELETE_HOLD_FRAMES = 15            # Consecutive frames DELETE gesture (fist) must be held (~0.5s at 30fps)
 MIN_MOVEMENT_THRESHOLD = 3.0       # Minimum pixel movement to consider fingertip moving
 MIN_TRAJECTORY_POINTS = 8          # Minimum trajectory points before CNN is called
 

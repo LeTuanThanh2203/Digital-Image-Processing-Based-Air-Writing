@@ -21,7 +21,7 @@ def filter_coordinate_jumps(points, max_jump_distance=50.0):
 
 def apply_simple_moving_average(points, window_size=5):
     """
-    Áp dụng Simple Moving Average (SMA) để làm mượt danh sách các tọa độ 2D.
+    Áp dụng Simple Moving Average (SMA) làm mượt tọa độ 2D (giữ độ chính xác sub-pixel float).
     """
     if len(points) < window_size:
         return points
@@ -32,8 +32,14 @@ def apply_simple_moving_average(points, window_size=5):
             smoothed_points.append(points[i])
         else:
             window = points[i - window_size + 1 : i + 1]
-            avg_x = int(np.mean([p[0] for p in window]))
-            avg_y = int(np.mean([p[1] for p in window]))
+            avg_x = float(np.mean([p[0] for p in window]))
+            avg_y = float(np.mean([p[1] for p in window]))
             smoothed_points.append((avg_x, avg_y))
 
     return smoothed_points
+
+
+def to_int_points(points):
+    """Chuyển đổi các điểm float sub-pixel sang tuple (int, int) khi vẽ bằng OpenCV."""
+    return [(int(round(pt[0])), int(round(pt[1]))) for pt in points if pt is not None]
+
