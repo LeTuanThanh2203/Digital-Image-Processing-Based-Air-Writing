@@ -61,9 +61,27 @@ class HybridDatasetClassifier:
         self,
         base_model_path: Union[str, Path],
         custom_dataset_dir: Optional[Union[str, Path]] = None,
-        class_labels: Optional[list] = None
+        class_labels: Optional[list] = None,
+        use_cnn: Optional[bool] = None
     ):
-        self.base_classifier = CharacterClassifier(base_model_path, class_labels=class_labels)
+        if use_cnn is None:
+            import config
+            self.use_cnn = getattr(config, 'USE_CNN', False)
+        else:
+            self.use_cnn = use_cnn
+
+        # Khởi tạo mô hình CNN base (giữ nguyên không xóa, chỉ suy luận khi use_cnn=True)
+        self.base_classifier = None
+        try:
+            self.base_classifier = CharacterClassifier(base_model_path, class_labels=class_labels)
+        except Exception as e:
+            print(f"[Notice] Base CNN classifier not loaded ({e}).")
+
+        if not self.use_cnn:
+            print("[Classifier Mode] >> CNN is DISABLED: Dang chay 100% Custom Dataset DIP SSIM (theo yeu cau). <<")
+        else:
+            print("[Classifier Mode] >> CNN is ENABLED: Dang chay che do Hybrid 70% Custom + 30% Base CNN. <<")
+
         if custom_dataset_dir is None:
             self.custom_dataset_dir = DEFAULT_CUSTOM_DATASET_DIR
         else:
@@ -156,22 +174,17 @@ class HybridDatasetClassifier:
         traj_stats: Optional[dict] = None
     ) -> Tuple[Optional[str], float, dict]:
         """
-        Dự đoán ký tự/chữ số kết hợp giữa CNN Model và Custom Dataset của người dùng.
+        Dự đoán ký tự/chữ số:
+        - Khi use_cnn = False: 100% Custom Dataset matching (SSIM template matching).
+        - Khi use_cnn = True: Kết hợp 70% Custom Dataset + 30% Base CNN.
         """
-        # 1. Lấy kết quả sơ bộ từ CNN base classifier
-        char_base, conf_base, info = self.base_classifier.predict(
-            input_data,
-            mode=mode,
-            confidence_threshold=confidence_threshold,
-            traj_stats=traj_stats
-        )
-
         if input_data is None or input_data.size == 0:
-            return None, 0.0, info
-
-        # Nếu chưa có custom sample nào, dùng 100% CNN Base
-        if not self.custom_samples:
-            return char_base, conf_base, info
+            return None, 0.0, {
+                'top1_char': None, 'top1_conf': 0.0,
+                'top2_char': None, 'top2_conf': 0.0,
+                'margin': 0.0, 'is_unknown': False,
+                'reject_reason': None
+            }
 
         # Đảm bảo input_data là ảnh 64x64 nhị phân
         img_64 = input_data
@@ -180,10 +193,75 @@ class HybridDatasetClassifier:
         if img_64.shape != (64, 64):
             img_64 = cv2.resize(img_64, (64, 64))
 
-        # 2. Tính điểm tương đồng SSIM của input_data với tất cả các lớp trong Custom Dataset
+        # -------------------------------------------------------------
+        # CHẾ ĐỘ 1: TẮT CNN -> CHỈ DÙNG 100% CUSTOM DATASET (SSIM)
+        # -------------------------------------------------------------
+        if not self.use_cnn or self.base_classifier is None:
+            custom_scores: Dict[str, float] = {}
+            for label, samples in self.custom_samples.items():
+                if mode == "LETTER" and not label.isalpha():
+                    continue
+                if mode == "NUMBER" and not label.isdigit():
+                    continue
+
+                scores = [compute_ssim_similarity(img_64, sample) for sample in samples]
+                custom_scores[label] = max(scores) if scores else 0.0
+
+            if not custom_scores:
+                return None, 0.0, {
+                    'top1_char': None, 'top1_conf': 0.0,
+                    'top2_char': None, 'top2_conf': 0.0,
+                    'margin': 0.0, 'is_unknown': True,
+                    'reject_reason': f"No custom samples found for mode '{mode}'"
+                }
+
+            sorted_custom = sorted(custom_scores.items(), key=lambda x: x[1], reverse=True)
+            top1_char, top1_ssim = sorted_custom[0]
+            top2_char, top2_ssim = sorted_custom[1] if len(sorted_custom) > 1 else (top1_char, 0.0)
+
+            top1_conf = round(top1_ssim * 100.0, 2)
+            top2_conf = round(top2_ssim * 100.0, 2)
+            margin = round(top1_conf - top2_conf, 2)
+
+            info = {
+                'top1_char': top1_char,
+                'top1_conf': top1_conf,
+                'top2_char': top2_char,
+                'top2_conf': top2_conf,
+                'margin': margin,
+                'custom_best_label': top1_char,
+                'custom_best_conf': top1_conf,
+                'weight_custom': 1.0,
+                'weight_base': 0.0,
+                'hybrid_boosted': False,
+                'cnn_enabled': False,
+                'is_unknown': False,
+                'reject_reason': None
+            }
+
+            if top1_conf < confidence_threshold:
+                info['is_unknown'] = True
+                info['reject_reason'] = f"Low Custom SSIM Confidence ({top1_conf:.1f}% < threshold {confidence_threshold}%)"
+                return "UNKNOWN", top1_conf, info
+
+            return top1_char, top1_conf, info
+
+        # -------------------------------------------------------------
+        # CHẾ ĐỘ 2: BẬT CNN -> KẾT HỢP HYBRID 70% CUSTOM + 30% BASE
+        # -------------------------------------------------------------
+        char_base, conf_base, info = self.base_classifier.predict(
+            input_data,
+            mode=mode,
+            confidence_threshold=confidence_threshold,
+            traj_stats=traj_stats
+        )
+
+        if not self.custom_samples:
+            return char_base, conf_base, info
+
+        # Tính điểm SSIM của input với Custom Dataset
         custom_scores: Dict[str, float] = {}
         for label, samples in self.custom_samples.items():
-            # Lọc theo mode nếu cần: LETTER chỉ so khớp với chữ cái, NUMBER chỉ so khớp với chữ số
             if mode == "LETTER" and not label.isalpha():
                 continue
             if mode == "NUMBER" and not label.isdigit():
@@ -195,19 +273,16 @@ class HybridDatasetClassifier:
         if not custom_scores:
             return char_base, conf_base, info
 
-        # Tìm nhãn có độ tương đồng Custom cao nhất
         best_custom_label = max(custom_scores, key=custom_scores.get)
         best_custom_ssim = custom_scores[best_custom_label]
         best_custom_conf = round(best_custom_ssim * 100.0, 2)
 
-        # 3. Hybrid Weighted Fusion (70% Custom Dataset + 30% Base Model)
         weight_custom = 0.70
         weight_base = 0.30
 
         info['custom_best_label'] = best_custom_label
         info['custom_best_conf'] = best_custom_conf
 
-        # Lấy tất cả danh sách nhãn phù hợp với mode
         valid_labels = self.base_classifier.class_labels
         if mode == "LETTER":
             valid_labels = [lbl for lbl in valid_labels if lbl.isalpha()]
@@ -236,13 +311,8 @@ class HybridDatasetClassifier:
             c_ssim = custom_scores.get(lbl, 0.0)
             c_conf = c_ssim * 100.0
             
-            # Tính điểm kết hợp 70% Custom + 30% Base
-            if base_preds is not None:
-                score = weight_custom * c_conf + weight_base * base_conf
-            else:
-                score = c_conf
+            score = weight_custom * c_conf + weight_base * base_conf if base_preds is not None else c_conf
 
-            # Nếu đây là lớp có Custom Match cao nhất (>= 50%), thưởng ưu tiên để luôn xếp Top-1
             if lbl == best_custom_label and c_ssim >= 0.50:
                 score = max(c_conf, score)
 
@@ -251,7 +321,6 @@ class HybridDatasetClassifier:
         if not hybrid_scores:
             return char_base, conf_base, info
 
-        # Trích xuất Top-1 và Top-2 từ điểm số Hybrid đã ưu tiên Custom Match
         sorted_hybrid = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)
         top1_char, top1_conf = sorted_hybrid[0]
         top2_char, top2_conf = sorted_hybrid[1] if len(sorted_hybrid) > 1 else (top1_char, 0.0)
@@ -264,6 +333,7 @@ class HybridDatasetClassifier:
         info['weight_custom'] = weight_custom
         info['weight_base'] = weight_base
         info['hybrid_boosted'] = True
+        info['cnn_enabled'] = True
         info['is_unknown'] = False
         info['reject_reason'] = None
 

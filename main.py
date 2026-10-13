@@ -70,6 +70,7 @@ def print_controls():
     print("  * Chon xong he thong TU DONG THEM DAU CACH (Space) de viet tiep!")
     print()
     print("  SYSTEM SHORTCUTS:")
+    print("  * [n]     : Bat/tat CNN model (Chuyen doi 100% Custom Dataset vs Hybrid 7:3)")
     print("  * [d]     : Bat/tat cua so CNN 64x64 debug")
     print("  * [c]     : Xoa canvas")
     print("  * [s]     : Luu canvas thanh file anh")
@@ -135,7 +136,11 @@ def main():
         # CNN + Custom Dataset Hybrid Classifier (load once)
         classifier = None
         try:
-            classifier = HybridDatasetClassifier(config.MODEL_PATH, class_labels=config.CLASS_LABELS)
+            classifier = HybridDatasetClassifier(
+                config.MODEL_PATH,
+                class_labels=config.CLASS_LABELS,
+                use_cnn=getattr(config, 'USE_CNN', False)
+            )
         except FileNotFoundError as e:
             print(f"[Warning] {e}")
             print("[Notice] System running in tracking-only mode. "
@@ -308,6 +313,8 @@ def main():
 
                     print("-" * 55)
                     print(" [TRAJECTORY DEBUG LOG]")
+                    engine_mode_str = "HYBRID (70% Custom + 30% CNN)" if info.get('cnn_enabled', False) else "100% CUSTOM DATASET (CNN OFF)"
+                    print(f"  Engine Mode        : {engine_mode_str}")
                     print(f"  Total points       : {traj_stats['total_pts']} (Strokes: {traj_stats['num_strokes']})")
                     print(f"  Bounding Box       : {traj_stats['bbox_w']}x{traj_stats['bbox_h']} (Aspect Ratio: {traj_stats['aspect_ratio']})")
                     print(f"  Step Distances     : Median={traj_stats['median_step_dist']}px, Max={traj_stats['max_step_dist']}px (Ratio: {traj_stats['ratio_max_to_median']}x)")
@@ -315,8 +322,10 @@ def main():
                     print(f"  Top-1 Class & Conf : '{info['top1_char']}' ({info['top1_conf']}%)")
                     print(f"  Top-2 Class & Conf : '{info['top2_char']}' ({info['top2_conf']}%)")
                     print(f"  Top Margin (T1-T2) : {info['margin']}%")
-                    if info.get('hybrid_boosted'):
+                    if info.get('cnn_enabled', False) and info.get('hybrid_boosted'):
                         print(f"  Hybrid Custom Match: YES -> '{info.get('custom_best_label')}' ({info.get('custom_best_conf')}%)")
+                    elif not info.get('cnn_enabled', False):
+                        print(f"  Custom SSIM Match  : YES -> '{info.get('custom_best_label')}' ({info.get('custom_best_conf')}%)")
                     print(f"  Validation Status  : {'REJECT / UNKNOWN' if info['is_unknown'] else 'ACCEPTED'}")
                     if info['reject_reason']:
                         print(f"  Reject Reason      : {info['reject_reason']}")
@@ -326,13 +335,14 @@ def main():
                         last_recognized_char = char
                         last_confidence = conf
                         recognized_text += char
-                        print(f"[WRITING] END -> HYBRID RECOGNITION: '{char}' ({conf:.2f}%)")
+                        rec_tag = "HYBRID RECOGNITION" if info.get('cnn_enabled', False) else "CUSTOM DATASET RECOGNITION"
+                        print(f"[WRITING] END -> {rec_tag}: '{char}' ({conf:.2f}%)")
                     elif char == "UNKNOWN":
                         last_recognized_char = "UNKNOWN"
                         last_confidence = conf
                         print(f"[WRITING] END -> UNKNOWN (Trajectory anomaly or low margin)")
                     else:
-                        print(f"[WRITING] END -> CNN: unrecognizable or confidence below {config.CONFIDENCE_THRESHOLD}%")
+                        print(f"[WRITING] END -> Unrecognizable or confidence below {config.CONFIDENCE_THRESHOLD}%")
                 elif classifier is None:
                     print(f"[WRITING] END -> Classifier not loaded! Cannot recognize.")
                 elif total_pts < config.MIN_TRAJECTORY_POINTS:
@@ -388,7 +398,8 @@ def main():
                 target_char=target_char,
                 custom_samples_count=custom_count,
                 suggestions=current_suggestions,
-                active_prefix=active_word_prefix
+                active_prefix=active_word_prefix,
+                cnn_enabled=(classifier.use_cnn if classifier else False)
             )
 
             cv2.imshow(window_name, master_dashboard)
@@ -432,6 +443,13 @@ def main():
 
             elif key == ord('q'):
                 break
+            elif key == ord('n'):
+                if classifier is not None:
+                    classifier.use_cnn = not classifier.use_cnn
+                    status_text = "ENABLED (Hybrid 70% Custom + 30% Base CNN)" if classifier.use_cnn else "DISABLED (100% Custom Dataset DIP SSIM)"
+                    print("=" * 60)
+                    print(f"[ENGINE TOGGLE] CNN is now: {status_text}")
+                    print("=" * 60)
             elif key == ord('m'):
                 current_mode = "NUMBER" if current_mode == "LETTER" else "LETTER"
                 if current_mode == "NUMBER":

@@ -38,6 +38,12 @@ CNN_INPUT_SIZE = (64, 64)
 CNN_NUM_CLASSES = 36
 SHOW_RECOGNITION_DEBUG = False     # Bật/tắt hiển thị cửa sổ debug 64x64 CNN input
 
+# --- Recognition Engine Mode ---
+# USE_CNN:
+# False: TẮT CNN, CHỈ DÙNG 100% CUSTOM DATASET (theo yêu cầu kiểm tra hiệu quả bộ mẫu cá nhân).
+# True : Bật kết hợp CNN và Custom Dataset (Hybrid Fusion 7:3).
+USE_CNN = False
+
 # Danh sách nhãn ký tự (CLASS_LABELS):
 # 1. Nếu đặt CLASS_LABELS = None: Hệ thống sẽ TỰ ĐỘNG đọc số lớp từ file model .keras.
 #    - Model 26 lớp -> Tự động ánh xạ: ['A'..'Z']

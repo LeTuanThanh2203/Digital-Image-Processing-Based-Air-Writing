@@ -65,7 +65,8 @@ class DashboardUI:
         target_char: str = "A",
         custom_samples_count: int = 0,
         suggestions: Optional[List[str]] = None,
-        active_prefix: str = ""
+        active_prefix: str = "",
+        cnn_enabled: bool = False
     ) -> np.ndarray:
         """Constructs and returns the full 1280x720 Dual-Panel Dashboard frame."""
         
@@ -95,7 +96,7 @@ class DashboardUI:
         right_x = 680
         
         # 1. App Title Header Card
-        self._draw_header_card(dashboard, right_x, 15, 585, 80)
+        self._draw_header_card(dashboard, right_x, 15, 585, 80, cnn_enabled=cnn_enabled)
         
         # 2. Status & Mode Grid
         self._draw_status_grid(
@@ -117,7 +118,7 @@ class DashboardUI:
         # 5. Shortcuts & System Info Footer Card
         self._draw_footer_card(
             dashboard, right_x, 635, 585, 70, show_cnn_debug,
-            collect_mode, target_char, custom_samples_count
+            collect_mode, target_char, custom_samples_count, cnn_enabled=cnn_enabled
         )
 
         return dashboard
@@ -134,13 +135,15 @@ class DashboardUI:
                 cv2.circle(img, (x + w - 30, y + 25), 6, (0, 0, 255), -1, cv2.LINE_AA)
                 cv2.putText(img, "LIVE", (x + w - 75, y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
-    def _draw_header_card(self, img: np.ndarray, x: int, y: int, w: int, h: int):
+    def _draw_header_card(self, img: np.ndarray, x: int, y: int, w: int, h: int, cnn_enabled: bool = False):
         """Draws top title card."""
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BORDER, 1, cv2.LINE_AA)
         
         cv2.putText(img, "AIR-WRITING SYSTEM", (x + 20, y + 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 230, 255), 2, cv2.LINE_AA)
-        cv2.putText(img, "DIP Trajectory Extraction & CNN Recognition", (x + 20, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
+        sub_title = "DIP Trajectory & Hybrid 7:3 (CNN ON)" if cnn_enabled else "DIP Trajectory & 100% Custom Dataset (CNN OFF)"
+        sub_color = (0, 255, 120) if not cnn_enabled else self.TEXT_SECONDARY
+        cv2.putText(img, sub_title, (x + 20, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, sub_color, 1, cv2.LINE_AA)
 
     def _draw_status_grid(
         self, img: np.ndarray, x: int, y: int, w: int, h: int,
@@ -273,7 +276,8 @@ class DashboardUI:
 
     def _draw_footer_card(
         self, img: np.ndarray, x: int, y: int, w: int, h: int, show_debug: bool,
-        collect_mode: bool = False, target_char: str = "A", custom_samples_count: int = 0
+        collect_mode: bool = False, target_char: str = "A", custom_samples_count: int = 0,
+        cnn_enabled: bool = False
     ):
         """Draws shortcut badges and footer information."""
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
@@ -286,12 +290,16 @@ class DashboardUI:
         cv2.putText(img, f"[t] Target: '{target_char}' ({target_type})", (x + 15, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 1, cv2.LINE_AA)
         cv2.putText(img, f"[r] Save Sample", (x + 175, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
         cv2.putText(img, f"Samples: {custom_samples_count}", (x + 325, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 50), 1, cv2.LINE_AA)
-        cv2.putText(img, f"[m] Mode", (x + 450, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
+        
+        cnn_badge = "[n] CNN: ON" if cnn_enabled else "[n] CNN: OFF"
+        cnn_color = (0, 255, 120) if cnn_enabled else (0, 180, 255)
+        cv2.putText(img, cnn_badge, (x + 440, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, cnn_color, 1, cv2.LINE_AA)
 
         # Line 2 Badges
-        cv2.putText(img, "[1-5] Pick Word", (x + 15, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
-        cv2.putText(img, "[c] Clear", (x + 140, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
-        cv2.putText(img, "[s] Save", (x + 220, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
+        cv2.putText(img, "[1-5] Word", (x + 15, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, "[m] Mode", (x + 115, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
+        cv2.putText(img, "[c] Clear", (x + 195, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
+        cv2.putText(img, "[s] Save", (x + 275, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
         dbg_text = "[d] Debug: ON" if show_debug else "[d] Debug: OFF"
-        cv2.putText(img, dbg_text, (x + 310, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 255) if show_debug else (150, 150, 150), 1, cv2.LINE_AA)
-        cv2.putText(img, "[q] Quit", (x + 450, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, dbg_text, (x + 355, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 255) if show_debug else (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.putText(img, "[q] Quit", (x + 475, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1, cv2.LINE_AA)
