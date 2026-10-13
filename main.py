@@ -10,6 +10,7 @@ from trajectory.trajectory_manager import TrajectoryManager
 from reconstruction.handwriting import HandwritingCanvas
 from reconstruction.ui_dashboard import DashboardUI
 from recognition.hybrid_classifier import HybridDatasetClassifier
+from recognition.trie_search import load_dictionary, get_current_word_prefix, apply_word_completion
 import numpy as np
 
 
@@ -33,10 +34,10 @@ STATE_RECOGNIZING = "RECOGNIZING"
 
 
 def print_controls():
-    """In huong dan thao tac gesture khi khoi dong chuong trinh."""
-    print("=" * 52)
-    print("  AIR-WRITING CONTROLS")
-    print("=" * 52)
+    """In huong dan thao tac gesture va ban phim khi khoi dong chuong trinh."""
+    print("=" * 60)
+    print("  AIR-WRITING CONTROLS & DUAL DATASET (LETTERS & NUMBERS)")
+    print("=" * 60)
     print()
     print("  WRITING  : Index UP, other fingers CLOSED")
     print("             -> Write with index fingertip")
@@ -47,7 +48,7 @@ def print_controls():
     print("  DELETE   : All fingers CLOSED (fist)")
     print("             -> Delete last character")
     print()
-    print("  MODE     : Index + Middle UP (V-sign)")
+    print("  MODE     : Index + Middle UP (V-sign) OR press [m]")
     print("             -> Switch LETTER / NUMBER mode")
     print()
     print("  IMPORTANT:")
@@ -57,12 +58,23 @@ def print_controls():
     print("  * SPACE requires holding ~0.5s to avoid accidents.")
     print("  * CNN fires ~{:.1f}s after you stop writing.".format(config.PENDING_DURATION))
     print()
-    print("  KEYBOARD SHORTCUTS:")
-    print("  [d] Toggle CNN 64x64 debug window")
-    print("  [c] Clear canvas")
-    print("  [s] Save canvas to file")
-    print("  [q] Quit")
-    print("=" * 52)
+    print("  DATASET TRAINING SHORTCUTS (CHU CAI & CHU SO):")
+    print("  * [t]     : Chuyen doi muc tieu thu thap (A-Z khi LETTER, 0-9 khi NUMBER)")
+    print("  * [0-9]   : Chon nhanh chu so 0-9 va tu dong chuyen sang NUMBER mode")
+    print("  * [m]     : Chuyen doi che do LETTER <-> NUMBER")
+    print("  * [r]     : Luu net ve lam mau Custom Dataset cho muc tieu dang chon")
+    print()
+    print("  WORD AUTOCOMPLETE / TRIE (GOI Y TU TIENG ANH):")
+    print("  * Khi viet chu cai, top 5 tu tieng Anh pho bien nhat se hien thi.")
+    print("  * Bam [1] - [5] (hoac Tab) hoac CLICK CHUOT vao nut de chon tu.")
+    print("  * Chon xong he thong TU DONG THEM DAU CACH (Space) de viet tiep!")
+    print()
+    print("  SYSTEM SHORTCUTS:")
+    print("  * [d]     : Bat/tat cua so CNN 64x64 debug")
+    print("  * [c]     : Xoa canvas")
+    print("  * [s]     : Luu canvas thanh file anh")
+    print("  * [q]     : Thoat chuong trinh")
+    print("=" * 60)
     print()
 
 
@@ -98,6 +110,28 @@ def main():
 
         dashboard_ui = DashboardUI(width=1280, height=720)
 
+        # Trie Dictionary for English Word Suggestions (500,000 words)
+        trie = None
+        if getattr(config, 'ENABLE_WORD_SUGGESTIONS', True):
+            try:
+                dict_path = getattr(config, 'DICTIONARY_PATH', 'frequency_dictionary_en_500_000.txt')
+                max_words = getattr(config, 'MAX_DICTIONARY_WORDS', 200000)
+                trie = load_dictionary(str(dict_path), max_words=max_words)
+            except Exception as e:
+                print(f"[Warning] Cannot load Trie word suggestions: {e}")
+
+        # Mouse click listener on window for selecting word suggestions
+        clicked_word_holder = [None]
+        def on_mouse_click(event, x, y, flags, param):
+            if event == cv2.EVENT_LBUTTONDOWN:
+                word = dashboard_ui.handle_click(x, y)
+                if word:
+                    clicked_word_holder[0] = word
+
+        window_name = "Air-Writing System (Dual-Panel Dashboard)"
+        cv2.namedWindow(window_name)
+        cv2.setMouseCallback(window_name, on_mouse_click)
+
         # CNN + Custom Dataset Hybrid Classifier (load once)
         classifier = None
         try:
@@ -122,9 +156,12 @@ def main():
         prev_log_state = None           # last printed writing state
         current_mode   = "LETTER"       # LETTER | NUMBER
         
-        # Target character selection for custom dataset collection
-        target_char_idx = 1             # Default 'B'
-        target_char = "B"
+        # Target character/number selection for custom dataset collection (Letters & Digits)
+        LETTER_TARGETS = [chr(ord('A') + i) for i in range(26)]
+        NUMBER_TARGETS = [str(i) for i in range(10)]
+        target_letter_idx = 0           # Default 'A'
+        target_number_idx = 0           # Default '0'
+        target_char = "A"               # Ký tự/chữ số đang chọn để train mẫu
         collect_mode = True
         last_rendered_img_64 = None
 
@@ -173,7 +210,12 @@ def main():
             if stable_gesture == "MODE" and mode_cooldown == 0:
                 current_mode = "NUMBER" if current_mode == "LETTER" else "LETTER"
                 mode_cooldown = 30
-                print(f"[MODE] {current_mode}")
+                if current_mode == "NUMBER":
+                    target_char = NUMBER_TARGETS[target_number_idx]
+                else:
+                    target_char = LETTER_TARGETS[target_letter_idx]
+                custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
+                print(f"[MODE] {current_mode} | Target: '{target_char}' ({custom_count} samples)")
 
             elif stable_gesture == "SPACE" and space_cooldown == 0:
                 space_hold_ctr += 1
@@ -319,6 +361,17 @@ def main():
 
             custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
 
+            # Word suggestions calculation via Trie
+            current_suggestions = []
+            active_word_prefix = ""
+            if trie is not None and current_mode == "LETTER":
+                active_word_prefix = get_current_word_prefix(recognized_text)
+                if active_word_prefix:
+                    current_suggestions = trie.search_prefix(
+                        active_word_prefix,
+                        limit=getattr(config, 'MAX_WORD_SUGGESTIONS', 5)
+                    )
+
             master_dashboard = dashboard_ui.create_dashboard(
                 camera_frame=frame,
                 canvas_img=current_canvas,
@@ -333,10 +386,12 @@ def main():
                 show_cnn_debug=show_cnn_debug,
                 collect_mode=collect_mode,
                 target_char=target_char,
-                custom_samples_count=custom_count
+                custom_samples_count=custom_count,
+                suggestions=current_suggestions,
+                active_prefix=active_word_prefix
             )
 
-            cv2.imshow("Air-Writing System (Dual-Panel Dashboard)", master_dashboard)
+            cv2.imshow(window_name, master_dashboard)
 
             if show_cnn_debug and classifier is not None:
                 smoothed_strokes = trajectory_mgr.get_smoothed_strokes()
@@ -349,14 +404,58 @@ def main():
                 cv2.imshow("CNN Input Debug (64x64)",
                            cv2.resize(debug_64x64, (200, 200), interpolation=cv2.INTER_NEAREST))
 
-            # Keyboard shortcuts
+            # Keyboard & Mouse shortcuts
             key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
+
+            # 1. Word suggestion selection check (Mouse click or Keys 1-5 or Tab)
+            chosen_word = None
+            if clicked_word_holder[0] is not None:
+                chosen_word = clicked_word_holder[0]
+                clicked_word_holder[0] = None
+
+            if current_suggestions and current_mode == "LETTER" and ord('1') <= key <= ord('5'):
+                idx = key - ord('1')
+                if idx < len(current_suggestions):
+                    chosen_word = current_suggestions[idx]
+            elif current_suggestions and current_mode == "LETTER" and key == 9:  # Tab
+                chosen_word = current_suggestions[0]
+
+            if chosen_word is not None:
+                recognized_text = apply_word_completion(recognized_text, chosen_word)
+                last_recognized_char = chosen_word.upper()
+                last_confidence = 100.0
+                trajectory_mgr.clear()
+                canvas_mgr.update_canvas([])
+                writing_state = STATE_IDLE
+                pending_start = None
+                print(f"[Word Suggestion] Selected '{chosen_word.upper()}' -> New Text: '{recognized_text}'")
+
+            elif key == ord('q'):
                 break
+            elif key == ord('m'):
+                current_mode = "NUMBER" if current_mode == "LETTER" else "LETTER"
+                if current_mode == "NUMBER":
+                    target_char = NUMBER_TARGETS[target_number_idx]
+                else:
+                    target_char = LETTER_TARGETS[target_letter_idx]
+                custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
+                print(f"[Mode] Switched to {current_mode} | Target: '{target_char}' ({custom_count} samples)")
             elif key == ord('t'):
-                target_char_idx = (target_char_idx + 1) % 26
-                target_char = chr(ord('A') + target_char_idx)
-                print(f"[Target] Selected Target Character for Custom Dataset: '{target_char}'")
+                if current_mode == "NUMBER":
+                    target_number_idx = (target_number_idx + 1) % len(NUMBER_TARGETS)
+                    target_char = NUMBER_TARGETS[target_number_idx]
+                else:
+                    target_letter_idx = (target_letter_idx + 1) % len(LETTER_TARGETS)
+                    target_char = LETTER_TARGETS[target_letter_idx]
+                custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
+                print(f"[Target] Selected {'Digit' if target_char.isdigit() else 'Letter'} for Custom Dataset: '{target_char}' ({custom_count} samples)")
+            elif ord('0') <= key <= ord('9'):
+                digit = chr(key)
+                current_mode = "NUMBER"
+                target_number_idx = int(digit)
+                target_char = digit
+                custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
+                print(f"[Quick Select] Mode NUMBER | Target Digit: '{target_char}' ({custom_count} samples)")
             elif key == ord('r'):
                 smoothed_strokes = trajectory_mgr.get_smoothed_strokes()
                 img_to_save = None
@@ -372,7 +471,9 @@ def main():
 
                 if classifier is not None and img_to_save is not None:
                     saved_path = classifier.save_custom_sample(target_char, img_to_save)
-                    print(f"[Custom Dataset] SAVED custom sample for '{target_char}' -> '{saved_path}'")
+                    custom_count = len(classifier.custom_samples.get(target_char, []))
+                    item_type = "NUMBER" if target_char.isdigit() else "LETTER"
+                    print(f"[Custom Dataset] SAVED {item_type} sample for '{target_char}' -> '{saved_path}' (Total: {custom_count} samples)")
                 else:
                     print(f"[Custom Dataset] Cannot save: No trajectory drawn on canvas!")
             elif key == ord('d'):

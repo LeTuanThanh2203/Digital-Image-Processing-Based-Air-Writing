@@ -57,5 +57,8 @@ SHOW_RECOGNITION_DEBUG = False     # Bật/tắt hiển thị cửa sổ debug 6
 
 CLASS_LABELS = None
 
-
-
+# --- Word Autocomplete / Trie Configuration ---
+ENABLE_WORD_SUGGESTIONS = True
+DICTIONARY_PATH = Path(__file__).resolve().parent / "frequency_dictionary_en_500_000.txt"
+MAX_WORD_SUGGESTIONS = 5
+MAX_DICTIONARY_WORDS = 200000   # Nạp top 200,000 từ phổ biến nhất (nạp trong < 0.8s, bao quát toàn bộ từ vựng)

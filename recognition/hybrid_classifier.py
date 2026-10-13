@@ -46,53 +46,84 @@ def compute_ssim_similarity(img1: np.ndarray, img2: np.ndarray) -> float:
     return float(np.mean(ssim_map))
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CUSTOM_DATASET_DIR = PROJECT_ROOT / "dataset" / "custom"
+
+
 class HybridDatasetClassifier:
     """
     Bộ phân loại kết hợp (Hybrid Ensemble Classifier):
-    - CNN Model gốc (huấn luyện trên 6DMG).
-    - Custom Dataset (người dùng tự lưu vào dataset/custom/<Label>/).
+    - CNN Model gốc (huấn luyện trên 6DMG/Digits).
+    - Custom Dataset (người dùng tự lưu vào dataset/custom/<Label>/ cho cả chữ và số).
     """
 
     def __init__(
         self,
         base_model_path: Union[str, Path],
-        custom_dataset_dir: Union[str, Path] = "dataset/custom",
+        custom_dataset_dir: Optional[Union[str, Path]] = None,
         class_labels: Optional[list] = None
     ):
         self.base_classifier = CharacterClassifier(base_model_path, class_labels=class_labels)
-        self.custom_dataset_dir = Path(custom_dataset_dir)
+        if custom_dataset_dir is None:
+            self.custom_dataset_dir = DEFAULT_CUSTOM_DATASET_DIR
+        else:
+            p = Path(custom_dataset_dir)
+            self.custom_dataset_dir = p if p.is_absolute() else (PROJECT_ROOT / p).resolve()
+
         self.custom_dataset_dir.mkdir(parents=True, exist_ok=True)
         
-        # Structure: {'A': [img1, img2...], 'B': [img1...]}
+        # Đảm bảo cấu trúc thư mục đầy đủ cho chữ cái (A-Z) và chữ số (0-9)
+        all_classes = [chr(ord('A') + i) for i in range(26)] + [str(i) for i in range(10)]
+        for c in all_classes:
+            (self.custom_dataset_dir / c).mkdir(parents=True, exist_ok=True)
+
+        # Structure: {'A': [img1, img2...], '0': [img1...]}
         self.custom_samples: Dict[str, List[np.ndarray]] = {}
         self.reload_custom_dataset()
 
     def reload_custom_dataset(self):
-        """Đọc và nạp lại toàn bộ các ảnh mẫu trong thư mục dataset/custom/."""
+        """Đọc và nạp lại toàn bộ các ảnh mẫu trong thư mục dataset/custom/ (hỗ trợ cả chữ A-Z và số 0-9)."""
         self.custom_samples.clear()
         total_count = 0
+        letters_count = 0
+        numbers_count = 0
         
+        valid_exts = ("*.png", "*.PNG", "*.jpg", "*.JPG", "*.jpeg", "*.JPEG")
         for label_dir in self.custom_dataset_dir.iterdir():
             if label_dir.is_dir():
                 label = label_dir.name.upper()
                 images = []
-                for img_path in glob.glob(str(label_dir / "*.png")):
-                    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                img_paths = []
+                for ext in valid_exts:
+                    img_paths.extend(glob.glob(str(label_dir / ext)))
+
+                for img_path in sorted(set(img_paths)):
+                    try:
+                        img_data = np.fromfile(img_path, dtype=np.uint8)
+                        img = cv2.imdecode(img_data, cv2.IMREAD_GRAYSCALE)
+                    except Exception:
+                        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+
                     if img is not None:
                         if img.shape != (64, 64):
                             img = cv2.resize(img, (64, 64))
                         images.append(img)
                         total_count += 1
+                        if label.isdigit():
+                            numbers_count += 1
+                        else:
+                            letters_count += 1
+
                 if images:
                     self.custom_samples[label] = images
 
-        print(f"[Hybrid Classifier] Loaded {total_count} custom dataset samples for {len(self.custom_samples)} classes.")
+        print(f"[Hybrid Classifier] Loaded {total_count} custom samples ({letters_count} letters, {numbers_count} digits) across {len(self.custom_samples)} classes.")
 
     def save_custom_sample(self, label: str, img_64: np.ndarray) -> str:
         """
-        Lưu một ảnh mẫu 64x64 nét chữ của người dùng vào dataset/custom/<label>/.
+        Lưu một ảnh mẫu 64x64 nét chữ hoặc chữ số của người dùng vào dataset/custom/<label>/.
         """
-        label = label.upper()
+        label = label.upper().strip()
         label_dir = self.custom_dataset_dir / label
         label_dir.mkdir(parents=True, exist_ok=True)
 
@@ -100,7 +131,11 @@ class HybridDatasetClassifier:
         filename = f"sample_{timestamp}.png"
         filepath = label_dir / filename
 
-        cv2.imwrite(str(filepath), img_64)
+        is_success, im_buf = cv2.imencode(".png", img_64)
+        if is_success:
+            im_buf.tofile(str(filepath))
+        else:
+            cv2.imwrite(str(filepath), img_64)
         
         # Nạp lại bộ mẫu cá nhân
         self.reload_custom_dataset()
@@ -121,7 +156,7 @@ class HybridDatasetClassifier:
         traj_stats: Optional[dict] = None
     ) -> Tuple[Optional[str], float, dict]:
         """
-        Dự đoán ký tự kết hợp giữa 6DMG CNN Model và Custom Dataset của người dùng.
+        Dự đoán ký tự/chữ số kết hợp giữa CNN Model và Custom Dataset của người dùng.
         """
         # 1. Lấy kết quả sơ bộ từ CNN base classifier
         char_base, conf_base, info = self.base_classifier.predict(
@@ -148,7 +183,7 @@ class HybridDatasetClassifier:
         # 2. Tính điểm tương đồng SSIM của input_data với tất cả các lớp trong Custom Dataset
         custom_scores: Dict[str, float] = {}
         for label, samples in self.custom_samples.items():
-            # Lọc theo mode nếu cần
+            # Lọc theo mode nếu cần: LETTER chỉ so khớp với chữ cái, NUMBER chỉ so khớp với chữ số
             if mode == "LETTER" and not label.isalpha():
                 continue
             if mode == "NUMBER" and not label.isdigit():
@@ -176,28 +211,45 @@ class HybridDatasetClassifier:
         valid_labels = self.base_classifier.class_labels
         if mode == "LETTER":
             valid_labels = [lbl for lbl in valid_labels if lbl.isalpha()]
+            if not valid_labels:
+                valid_labels = [chr(ord('A') + i) for i in range(26)]
         elif mode == "NUMBER":
             valid_labels = [lbl for lbl in valid_labels if lbl.isdigit()]
+            if not valid_labels:
+                valid_labels = [str(i) for i in range(10)]
 
         tensor, _ = self.base_classifier.preprocess(input_data)
-        base_preds = self.base_classifier.model.predict(tensor, verbose=0)[0]
+        base_preds = None
+        if tensor is not None and hasattr(self.base_classifier, 'model') and self.base_classifier.model is not None:
+            try:
+                base_preds = self.base_classifier.model.predict(tensor, verbose=0)[0]
+            except Exception:
+                base_preds = None
 
         hybrid_scores: Dict[str, float] = {}
         for lbl in valid_labels:
-            idx = self.base_classifier.class_labels.index(lbl) if lbl in self.base_classifier.class_labels else 0
-            base_conf = float(base_preds[idx]) * 100.0
+            base_conf = 0.0
+            if base_preds is not None and lbl in self.base_classifier.class_labels:
+                idx = self.base_classifier.class_labels.index(lbl)
+                base_conf = float(base_preds[idx]) * 100.0
             
             c_ssim = custom_scores.get(lbl, 0.0)
             c_conf = c_ssim * 100.0
             
             # Tính điểm kết hợp 70% Custom + 30% Base
-            score = weight_custom * c_conf + weight_base * base_conf
+            if base_preds is not None:
+                score = weight_custom * c_conf + weight_base * base_conf
+            else:
+                score = c_conf
 
             # Nếu đây là lớp có Custom Match cao nhất (>= 50%), thưởng ưu tiên để luôn xếp Top-1
             if lbl == best_custom_label and c_ssim >= 0.50:
                 score = max(c_conf, score)
 
             hybrid_scores[lbl] = round(score, 2)
+
+        if not hybrid_scores:
+            return char_base, conf_base, info
 
         # Trích xuất Top-1 và Top-2 từ điểm số Hybrid đã ưu tiên Custom Match
         sorted_hybrid = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)

@@ -38,6 +38,16 @@ class DashboardUI:
         self._last_canvas_id = None
         self._cached_canvas_preview = None
 
+        # Bounding boxes cho các nút gợi ý từ có thể click chuột [(x1, y1, x2, y2, word)]
+        self.suggestion_rects: List[Tuple[int, int, int, int, str]] = []
+
+    def handle_click(self, mouse_x: int, mouse_y: int) -> Optional[str]:
+        """Kiểm tra toạ độ click chuột có trúng nút gợi ý từ nào không."""
+        for (x1, y1, x2, y2, word) in self.suggestion_rects:
+            if x1 <= mouse_x <= x2 and y1 <= mouse_y <= y2:
+                return word
+        return None
+
     def create_dashboard(
         self,
         camera_frame: np.ndarray,
@@ -52,8 +62,10 @@ class DashboardUI:
         pending_duration: float = 1.0,
         show_cnn_debug: bool = False,
         collect_mode: bool = False,
-        target_char: str = "B",
-        custom_samples_count: int = 0
+        target_char: str = "A",
+        custom_samples_count: int = 0,
+        suggestions: Optional[List[str]] = None,
+        active_prefix: str = ""
     ) -> np.ndarray:
         """Constructs and returns the full 1280x720 Dual-Panel Dashboard frame."""
         
@@ -95,10 +107,11 @@ class DashboardUI:
         # 3. Canvas Preview Card
         self._draw_canvas_card(dashboard, right_x, 210, 585, 275, canvas_img)
 
-        # 4. Recognition Result & Confidence Card
+        # 4. Recognition Result & Confidence Card (Kèm gợi ý từ Trie)
         self._draw_result_card(
             dashboard, right_x, 495, 585, 130,
-            recognized_text, last_recognized_char, last_confidence
+            recognized_text, last_recognized_char, last_confidence,
+            suggestions=suggestions, active_prefix=active_prefix
         )
 
         # 5. Shortcuts & System Info Footer Card
@@ -189,27 +202,31 @@ class DashboardUI:
 
     def _draw_result_card(
         self, img: np.ndarray, x: int, y: int, w: int, h: int,
-        text: str, last_char: Optional[str], confidence: float
+        text: str, last_char: Optional[str], confidence: float,
+        suggestions: Optional[List[str]] = None,
+        active_prefix: str = ""
     ):
-        """Draws recognition result and confidence progress meter."""
+        """Draws recognition result, confidence meter, and interactive Trie word suggestions."""
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BORDER, 1, cv2.LINE_AA)
 
-        # Recognized Sentence
+        # 1. Recognized Sentence
         display_text = text if text else "(Write on camera...)"
-        cv2.putText(img, "RECOGNIZED TEXT:", (x + 15, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
-        cv2.putText(img, display_text, (x + 15, y + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
+        if len(display_text) > 22:
+            display_text = "..." + display_text[-20:]
 
-        # Last Character & Confidence Bar
+        cv2.putText(img, "RECOGNIZED TEXT:", (x + 15, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
+        cv2.putText(img, display_text, (x + 15, y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (0, 255, 255), 2, cv2.LINE_AA)
+
+        # 2. Last Character & Confidence Bar
         if last_char is not None:
             char_str = f"Last: '{last_char}'"
             conf_str = f"{confidence:.1f}%"
-            cv2.putText(img, char_str, (x + 360, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 230, 255), 2, cv2.LINE_AA)
-            cv2.putText(img, conf_str, (x + 480, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.putText(img, char_str, (x + 360, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 2, cv2.LINE_AA)
+            cv2.putText(img, conf_str, (x + 480, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 2, cv2.LINE_AA)
 
-            # Confidence Progress Bar
             bar_x = x + 360
-            bar_y = y + 38
+            bar_y = y + 33
             bar_max_w = 190
             bar_w = int((confidence / 100.0) * bar_max_w)
             
@@ -217,24 +234,64 @@ class DashboardUI:
             cv2.rectangle(img, (bar_x, bar_y), (bar_x + bar_w, bar_y + 12), bar_color, -1)
             cv2.rectangle(img, (bar_x, bar_y), (bar_x + bar_max_w, bar_y + 12), (100, 100, 100), 1)
 
+        # Separator Line
+        cv2.line(img, (x + 15, y + 62), (x + w - 15, y + 62), (48, 58, 76), 1)
+
+        # 3. Word Suggestions (Trie Autocompletion)
+        self.suggestion_rects.clear()
+        if suggestions and len(suggestions) > 0:
+            header_str = f"WORD SUGGESTIONS for '{active_prefix.upper()}' (Press [1-{len(suggestions)}] or Click):"
+            cv2.putText(img, header_str, (x + 15, y + 78), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 230, 255), 1, cv2.LINE_AA)
+
+            num_sug = len(suggestions)
+            gap = 6
+            available_w = w - 30
+            btn_w = int((available_w - (max(1, num_sug - 1) * gap)) / max(1, num_sug))
+            btn_y1 = y + 87
+            btn_y2 = y + 119
+
+            for i, word in enumerate(suggestions):
+                btn_x1 = x + 15 + i * (btn_w + gap)
+                btn_x2 = btn_x1 + btn_w
+                self.suggestion_rects.append((btn_x1, btn_y1, btn_x2, btn_y2, word))
+
+                # Button container
+                cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), (45, 54, 72), -1)
+                cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), (75, 95, 125), 1, cv2.LINE_AA)
+
+                # Number badge & Word
+                w_disp = word.upper()
+                if len(w_disp) > 6:
+                    w_disp = w_disp[:5] + "."
+                lbl = f"[{i+1}] {w_disp}"
+                cv2.putText(img, lbl, (btn_x1 + 6, btn_y1 + 21), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+        else:
+            if active_prefix:
+                cv2.putText(img, f"WORD SUGGESTIONS: No matching words for prefix '{active_prefix.upper()}'", (x + 15, y + 95), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (140, 140, 150), 1, cv2.LINE_AA)
+            else:
+                cv2.putText(img, "WORD SUGGESTIONS: (Write letters to see 500k dictionary autocompletions)", (x + 15, y + 95), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (120, 135, 155), 1, cv2.LINE_AA)
+
     def _draw_footer_card(
         self, img: np.ndarray, x: int, y: int, w: int, h: int, show_debug: bool,
-        collect_mode: bool = False, target_char: str = "B", custom_samples_count: int = 0
+        collect_mode: bool = False, target_char: str = "A", custom_samples_count: int = 0
     ):
         """Draws shortcut badges and footer information."""
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BORDER, 1, cv2.LINE_AA)
 
-        cv2.putText(img, "KEYBOARD SHORTCUTS:", (x + 15, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
+        cv2.putText(img, "KEYBOARD SHORTCUTS & DATASET TRAIN:", (x + 15, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
 
         # Line 1 Badges
-        cv2.putText(img, f"[t] Target: '{target_char}'", (x + 15, y + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 1, cv2.LINE_AA)
-        cv2.putText(img, f"[r] Save Custom Sample", (x + 160, y + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
-        cv2.putText(img, f"Custom Samples: {custom_samples_count}", (x + 380, y + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
+        target_type = "NUM" if target_char.isdigit() else "LET"
+        cv2.putText(img, f"[t] Target: '{target_char}' ({target_type})", (x + 15, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, f"[r] Save Sample", (x + 175, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
+        cv2.putText(img, f"Samples: {custom_samples_count}", (x + 325, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 50), 1, cv2.LINE_AA)
+        cv2.putText(img, f"[m] Mode", (x + 450, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
 
         # Line 2 Badges
+        cv2.putText(img, "[1-5] Pick Word", (x + 15, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, "[c] Clear", (x + 140, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
+        cv2.putText(img, "[s] Save", (x + 220, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
         dbg_text = "[d] Debug: ON" if show_debug else "[d] Debug: OFF"
-        cv2.putText(img, dbg_text, (x + 15, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255) if show_debug else (150, 150, 150), 1, cv2.LINE_AA)
-        cv2.putText(img, "[c] Clear", (x + 160, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
-        cv2.putText(img, "[s] Save Image", (x + 280, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.TEXT_PRIMARY, 1, cv2.LINE_AA)
-        cv2.putText(img, "[q] Quit", (x + 450, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, dbg_text, (x + 310, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 255) if show_debug else (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.putText(img, "[q] Quit", (x + 450, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1, cv2.LINE_AA)
