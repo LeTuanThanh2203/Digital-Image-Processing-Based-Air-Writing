@@ -61,26 +61,16 @@ class HybridDatasetClassifier:
         self,
         base_model_path: Union[str, Path],
         custom_dataset_dir: Optional[Union[str, Path]] = None,
-        class_labels: Optional[list] = None,
-        use_cnn: Optional[bool] = None
+        class_labels: Optional[list] = None
     ):
-        if use_cnn is None:
-            import config
-            self.use_cnn = getattr(config, 'USE_CNN', False)
-        else:
-            self.use_cnn = use_cnn
-
-        # Khởi tạo mô hình CNN base (giữ nguyên không xóa, chỉ suy luận khi use_cnn=True)
+        # Khởi tạo mô hình CNN base
         self.base_classifier = None
         try:
             self.base_classifier = CharacterClassifier(base_model_path, class_labels=class_labels)
         except Exception as e:
             print(f"[Notice] Base CNN classifier not loaded ({e}).")
 
-        if not self.use_cnn:
-            print("[Classifier Mode] >> CNN is DISABLED: Dang chay 100% Custom Dataset DIP SSIM (theo yeu cau). <<")
-        else:
-            print("[Classifier Mode] >> CNN is ENABLED: Dang chay che do Hybrid 70% Custom + 30% Base CNN. <<")
+        print("[Classifier Mode] >> Hybrid Classifier active: 70% Custom Dataset DIP SSIM + 30% Base CNN. <<")
 
         if custom_dataset_dir is None:
             self.custom_dataset_dir = DEFAULT_CUSTOM_DATASET_DIR
@@ -174,9 +164,7 @@ class HybridDatasetClassifier:
         traj_stats: Optional[dict] = None
     ) -> Tuple[Optional[str], float, dict]:
         """
-        Dự đoán ký tự/chữ số:
-        - Khi use_cnn = False: 100% Custom Dataset matching (SSIM template matching).
-        - Khi use_cnn = True: Kết hợp 70% Custom Dataset + 30% Base CNN.
+        Dự đoán ký tự/chữ số bằng bộ phân loại Hybrid (70% Custom Dataset + 30% Base CNN).
         """
         if input_data is None or input_data.size == 0:
             return None, 0.0, {
@@ -193,10 +181,8 @@ class HybridDatasetClassifier:
         if img_64.shape != (64, 64):
             img_64 = cv2.resize(img_64, (64, 64))
 
-        # -------------------------------------------------------------
-        # CHẾ ĐỘ 1: TẮT CNN -> CHỈ DÙNG 100% CUSTOM DATASET (SSIM)
-        # -------------------------------------------------------------
-        if not self.use_cnn or self.base_classifier is None:
+        # Nếu không có base CNN classifier, fallback sang dùng thuần Custom Dataset
+        if self.base_classifier is None:
             custom_scores: Dict[str, float] = {}
             for label, samples in self.custom_samples.items():
                 if mode == "LETTER" and not label.isalpha():
@@ -234,7 +220,6 @@ class HybridDatasetClassifier:
                 'weight_custom': 1.0,
                 'weight_base': 0.0,
                 'hybrid_boosted': False,
-                'cnn_enabled': False,
                 'is_unknown': False,
                 'reject_reason': None
             }
@@ -246,9 +231,7 @@ class HybridDatasetClassifier:
 
             return top1_char, top1_conf, info
 
-        # -------------------------------------------------------------
-        # CHẾ ĐỘ 2: BẬT CNN -> KẾT HỢP HYBRID 70% CUSTOM + 30% BASE
-        # -------------------------------------------------------------
+        # --- CHẾ ĐỘ HYBRID (70% Custom Dataset SSIM + 30% Base CNN) ---
         char_base, conf_base, info = self.base_classifier.predict(
             input_data,
             mode=mode,
@@ -333,7 +316,6 @@ class HybridDatasetClassifier:
         info['weight_custom'] = weight_custom
         info['weight_base'] = weight_base
         info['hybrid_boosted'] = True
-        info['cnn_enabled'] = True
         info['is_unknown'] = False
         info['reject_reason'] = None
 

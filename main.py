@@ -66,11 +66,11 @@ def print_controls():
     print()
     print("  WORD AUTOCOMPLETE / TRIE (GOI Y TU TIENG ANH):")
     print("  * Khi viet chu cai, top 5 tu tieng Anh pho bien nhat se hien thi.")
-    print("  * Bam [1] - [5] (hoac Tab) hoac CLICK CHUOT vao nut de chon tu.")
+    print("  * CU CHI TAY: Chi dau ngon tay vao o tu 0.8s (hoac chum ngon Air-Pinch) de CHON!")
+    print("  * Ngoai ra co the bam [1] - [5] (hoac Tab) hoac CLICK CHUOT vao nut de chon tu.")
     print("  * Chon xong he thong TU DONG THEM DAU CACH (Space) de viet tiep!")
     print()
     print("  SYSTEM SHORTCUTS:")
-    print("  * [n]     : Bat/tat CNN model (Chuyen doi 100% Custom Dataset vs Hybrid 7:3)")
     print("  * [d]     : Bat/tat cua so CNN 64x64 debug")
     print("  * [c]     : Xoa canvas")
     print("  * [s]     : Luu canvas thanh file anh")
@@ -138,8 +138,7 @@ def main():
         try:
             classifier = HybridDatasetClassifier(
                 config.MODEL_PATH,
-                class_labels=config.CLASS_LABELS,
-                use_cnn=getattr(config, 'USE_CNN', False)
+                class_labels=config.CLASS_LABELS
             )
         except FileNotFoundError as e:
             print(f"[Warning] {e}")
@@ -171,11 +170,16 @@ def main():
         last_rendered_img_64 = None
 
         # Per-gesture cooldowns (frame counters)
-        mode_cooldown   = 0
-        delete_cooldown = 0
-        space_cooldown  = 0
-        space_hold_ctr  = 0
-        delete_hold_ctr = 0
+        mode_cooldown    = 0
+        delete_cooldown  = 0
+        space_cooldown   = 0
+        cycle_cooldown   = 0
+        confirm_cooldown = 0
+        space_hold_ctr   = 0
+        delete_hold_ctr  = 0
+        cycle_hold_ctr   = 0
+        confirm_hold_ctr = 0
+        active_suggestion_idx = 0
         pending_resume_ctr = 0
 
         show_cnn_debug = config.SHOW_RECOGNITION_DEBUG
@@ -204,14 +208,35 @@ def main():
                 prev_gesture = stable_gesture
 
             # Decrement cooldowns every frame
-            if mode_cooldown   > 0: mode_cooldown   -= 1
-            if delete_cooldown > 0: delete_cooldown -= 1
-            if space_cooldown  > 0: space_cooldown  -= 1
+            if mode_cooldown    > 0: mode_cooldown    -= 1
+            if delete_cooldown  > 0: delete_cooldown  -= 1
+            if space_cooldown   > 0: space_cooldown   -= 1
+            if cycle_cooldown   > 0: cycle_cooldown   -= 1
+            if confirm_cooldown > 0: confirm_cooldown -= 1
             if stable_gesture != "SPACE": space_hold_ctr = 0
             if stable_gesture != "DELETE": delete_hold_ctr = 0
+            if stable_gesture != "CYCLE": cycle_hold_ctr = 0
+            if stable_gesture != "CONFIRM": confirm_hold_ctr = 0
             if stable_gesture != "WRITING": pending_resume_ctr = 0
 
+            # Word suggestions calculation via Trie
+            current_suggestions = []
+            active_word_prefix = ""
+            if trie is not None and current_mode == "LETTER":
+                active_word_prefix = get_current_word_prefix(recognized_text)
+                if active_word_prefix:
+                    current_suggestions = trie.search_prefix(
+                        active_word_prefix,
+                        limit=getattr(config, 'MAX_WORD_SUGGESTIONS', 5)
+                    )
+            if current_suggestions:
+                active_suggestion_idx = active_suggestion_idx % len(current_suggestions)
+            else:
+                active_suggestion_idx = 0
+
             # GESTURE CONTROL LOGIC
+            gesture_chosen_word = None
+
             if stable_gesture == "MODE" and mode_cooldown == 0:
                 current_mode = "NUMBER" if current_mode == "LETTER" else "LETTER"
                 mode_cooldown = 30
@@ -221,6 +246,28 @@ def main():
                     target_char = LETTER_TARGETS[target_letter_idx]
                 custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
                 print(f"[MODE] {current_mode} | Target: '{target_char}' ({custom_count} samples)")
+
+            # CỬ CHỈ CYCLE (Chữ L: Ngón cái + ngón trỏ duỗi vuông góc, 3 ngón còn lại co)
+            # Chuyển đổi qua lại giữa các lựa chọn 1 - 5 khi giữ khoảng 10 frames
+            elif stable_gesture == "CYCLE" and cycle_cooldown == 0:
+                cycle_hold_ctr += 1
+                if cycle_hold_ctr >= 10:  # Giữ cử chỉ ~10 frames theo đúng yêu cầu
+                    if current_suggestions and len(current_suggestions) > 1 and current_mode == "LETTER":
+                        active_suggestion_idx = (active_suggestion_idx + 1) % len(current_suggestions)
+                        cycle_cooldown = 12  # Ngăn nhảy quá nhanh nếu tiếp tục giữ tay
+                        cycle_hold_ctr = 0
+                        print(f"[GESTURE] CYCLE (Chữ L) -> Đang trỏ vào từ [{active_suggestion_idx + 1}]: '{current_suggestions[active_suggestion_idx].upper()}'")
+
+            # CỬ CHỈ CONFIRM (3 ngón: Trỏ + Giữa + Áp út duỗi thẳng, ngón út co)
+            # Chốt chọn từ đang được highlight
+            elif stable_gesture == "CONFIRM" and confirm_cooldown == 0:
+                confirm_hold_ctr += 1
+                if confirm_hold_ctr >= 8:  # Giữ ~8 frames (~0.25s) để chốt chọn
+                    if current_suggestions and current_mode == "LETTER":
+                        gesture_chosen_word = current_suggestions[active_suggestion_idx]
+                        confirm_cooldown = 30
+                        confirm_hold_ctr = 0
+                        print(f"[GESTURE] CONFIRM (3 ngón) -> Đã chốt chọn từ: '{gesture_chosen_word.upper()}'")
 
             elif stable_gesture == "SPACE" and space_cooldown == 0:
                 space_hold_ctr += 1
@@ -313,8 +360,7 @@ def main():
 
                     print("-" * 55)
                     print(" [TRAJECTORY DEBUG LOG]")
-                    engine_mode_str = "HYBRID (70% Custom + 30% CNN)" if info.get('cnn_enabled', False) else "100% CUSTOM DATASET (CNN OFF)"
-                    print(f"  Engine Mode        : {engine_mode_str}")
+                    print("  Engine Mode        : HYBRID (70% Custom Dataset + 30% Base CNN)")
                     print(f"  Total points       : {traj_stats['total_pts']} (Strokes: {traj_stats['num_strokes']})")
                     print(f"  Bounding Box       : {traj_stats['bbox_w']}x{traj_stats['bbox_h']} (Aspect Ratio: {traj_stats['aspect_ratio']})")
                     print(f"  Step Distances     : Median={traj_stats['median_step_dist']}px, Max={traj_stats['max_step_dist']}px (Ratio: {traj_stats['ratio_max_to_median']}x)")
@@ -322,10 +368,8 @@ def main():
                     print(f"  Top-1 Class & Conf : '{info['top1_char']}' ({info['top1_conf']}%)")
                     print(f"  Top-2 Class & Conf : '{info['top2_char']}' ({info['top2_conf']}%)")
                     print(f"  Top Margin (T1-T2) : {info['margin']}%")
-                    if info.get('cnn_enabled', False) and info.get('hybrid_boosted'):
+                    if info.get('hybrid_boosted'):
                         print(f"  Hybrid Custom Match: YES -> '{info.get('custom_best_label')}' ({info.get('custom_best_conf')}%)")
-                    elif not info.get('cnn_enabled', False):
-                        print(f"  Custom SSIM Match  : YES -> '{info.get('custom_best_label')}' ({info.get('custom_best_conf')}%)")
                     print(f"  Validation Status  : {'REJECT / UNKNOWN' if info['is_unknown'] else 'ACCEPTED'}")
                     if info['reject_reason']:
                         print(f"  Reject Reason      : {info['reject_reason']}")
@@ -335,8 +379,7 @@ def main():
                         last_recognized_char = char
                         last_confidence = conf
                         recognized_text += char
-                        rec_tag = "HYBRID RECOGNITION" if info.get('cnn_enabled', False) else "CUSTOM DATASET RECOGNITION"
-                        print(f"[WRITING] END -> {rec_tag}: '{char}' ({conf:.2f}%)")
+                        print(f"[WRITING] END -> HYBRID RECOGNITION: '{char}' ({conf:.2f}%)")
                     elif char == "UNKNOWN":
                         last_recognized_char = "UNKNOWN"
                         last_confidence = conf
@@ -371,17 +414,6 @@ def main():
 
             custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
 
-            # Word suggestions calculation via Trie
-            current_suggestions = []
-            active_word_prefix = ""
-            if trie is not None and current_mode == "LETTER":
-                active_word_prefix = get_current_word_prefix(recognized_text)
-                if active_word_prefix:
-                    current_suggestions = trie.search_prefix(
-                        active_word_prefix,
-                        limit=getattr(config, 'MAX_WORD_SUGGESTIONS', 5)
-                    )
-
             master_dashboard = dashboard_ui.create_dashboard(
                 camera_frame=frame,
                 canvas_img=current_canvas,
@@ -399,7 +431,7 @@ def main():
                 custom_samples_count=custom_count,
                 suggestions=current_suggestions,
                 active_prefix=active_word_prefix,
-                cnn_enabled=(classifier.use_cnn if classifier else False)
+                selected_idx=active_suggestion_idx
             )
 
             cv2.imshow(window_name, master_dashboard)
@@ -418,17 +450,17 @@ def main():
             # Keyboard & Mouse shortcuts
             key = cv2.waitKey(1) & 0xFF
 
-            # 1. Word suggestion selection check (Mouse click or Keys 1-5 or Tab)
-            chosen_word = None
-            if clicked_word_holder[0] is not None:
+            # 1. Word suggestion selection check (Gesture CONFIRM, Mouse click, or Keys 1-5 / Tab)
+            chosen_word = gesture_chosen_word
+            if chosen_word is None and clicked_word_holder[0] is not None:
                 chosen_word = clicked_word_holder[0]
                 clicked_word_holder[0] = None
 
-            if current_suggestions and current_mode == "LETTER" and ord('1') <= key <= ord('5'):
+            if chosen_word is None and current_suggestions and current_mode == "LETTER" and ord('1') <= key <= ord('5'):
                 idx = key - ord('1')
                 if idx < len(current_suggestions):
                     chosen_word = current_suggestions[idx]
-            elif current_suggestions and current_mode == "LETTER" and key == 9:  # Tab
+            elif chosen_word is None and current_suggestions and current_mode == "LETTER" and key == 9:  # Tab
                 chosen_word = current_suggestions[0]
 
             if chosen_word is not None:
@@ -439,17 +471,12 @@ def main():
                 canvas_mgr.update_canvas([])
                 writing_state = STATE_IDLE
                 pending_start = None
-                print(f"[Word Suggestion] Selected '{chosen_word.upper()}' -> New Text: '{recognized_text}'")
+                active_suggestion_idx = 0
+                selection_method = "Cử chỉ CONFIRM (3 ngón)" if gesture_chosen_word else "Bàn phím/Chuột"
+                print(f"[Word Suggestion - {selection_method}] Selected '{chosen_word.upper()}' -> New Text: '{recognized_text}'")
 
             elif key == ord('q'):
                 break
-            elif key == ord('n'):
-                if classifier is not None:
-                    classifier.use_cnn = not classifier.use_cnn
-                    status_text = "ENABLED (Hybrid 70% Custom + 30% Base CNN)" if classifier.use_cnn else "DISABLED (100% Custom Dataset DIP SSIM)"
-                    print("=" * 60)
-                    print(f"[ENGINE TOGGLE] CNN is now: {status_text}")
-                    print("=" * 60)
             elif key == ord('m'):
                 current_mode = "NUMBER" if current_mode == "LETTER" else "LETTER"
                 if current_mode == "NUMBER":

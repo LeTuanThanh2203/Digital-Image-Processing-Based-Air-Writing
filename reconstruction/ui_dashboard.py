@@ -66,7 +66,7 @@ class DashboardUI:
         custom_samples_count: int = 0,
         suggestions: Optional[List[str]] = None,
         active_prefix: str = "",
-        cnn_enabled: bool = False
+        selected_idx: int = 0
     ) -> np.ndarray:
         """Constructs and returns the full 1280x720 Dual-Panel Dashboard frame."""
         
@@ -96,7 +96,7 @@ class DashboardUI:
         right_x = 680
         
         # 1. App Title Header Card
-        self._draw_header_card(dashboard, right_x, 15, 585, 80, cnn_enabled=cnn_enabled)
+        self._draw_header_card(dashboard, right_x, 15, 585, 80)
         
         # 2. Status & Mode Grid
         self._draw_status_grid(
@@ -112,13 +112,14 @@ class DashboardUI:
         self._draw_result_card(
             dashboard, right_x, 495, 585, 130,
             recognized_text, last_recognized_char, last_confidence,
-            suggestions=suggestions, active_prefix=active_prefix
+            suggestions=suggestions, active_prefix=active_prefix,
+            selected_idx=selected_idx
         )
 
         # 5. Shortcuts & System Info Footer Card
         self._draw_footer_card(
             dashboard, right_x, 635, 585, 70, show_cnn_debug,
-            collect_mode, target_char, custom_samples_count, cnn_enabled=cnn_enabled
+            collect_mode, target_char, custom_samples_count
         )
 
         return dashboard
@@ -135,15 +136,14 @@ class DashboardUI:
                 cv2.circle(img, (x + w - 30, y + 25), 6, (0, 0, 255), -1, cv2.LINE_AA)
                 cv2.putText(img, "LIVE", (x + w - 75, y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
-    def _draw_header_card(self, img: np.ndarray, x: int, y: int, w: int, h: int, cnn_enabled: bool = False):
+    def _draw_header_card(self, img: np.ndarray, x: int, y: int, w: int, h: int):
         """Draws top title card."""
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BORDER, 1, cv2.LINE_AA)
         
         cv2.putText(img, "AIR-WRITING SYSTEM", (x + 20, y + 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 230, 255), 2, cv2.LINE_AA)
-        sub_title = "DIP Trajectory & Hybrid 7:3 (CNN ON)" if cnn_enabled else "DIP Trajectory & 100% Custom Dataset (CNN OFF)"
-        sub_color = (0, 255, 120) if not cnn_enabled else self.TEXT_SECONDARY
-        cv2.putText(img, sub_title, (x + 20, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, sub_color, 1, cv2.LINE_AA)
+        sub_title = "DIP Trajectory & Hybrid Recognition (70% Custom + 30% CNN)"
+        cv2.putText(img, sub_title, (x + 20, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
 
     def _draw_status_grid(
         self, img: np.ndarray, x: int, y: int, w: int, h: int,
@@ -207,7 +207,8 @@ class DashboardUI:
         self, img: np.ndarray, x: int, y: int, w: int, h: int,
         text: str, last_char: Optional[str], confidence: float,
         suggestions: Optional[List[str]] = None,
-        active_prefix: str = ""
+        active_prefix: str = "",
+        selected_idx: int = 0
     ):
         """Draws recognition result, confidence meter, and interactive Trie word suggestions."""
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
@@ -243,8 +244,8 @@ class DashboardUI:
         # 3. Word Suggestions (Trie Autocompletion)
         self.suggestion_rects.clear()
         if suggestions and len(suggestions) > 0:
-            header_str = f"WORD SUGGESTIONS for '{active_prefix.upper()}' (Press [1-{len(suggestions)}] or Click):"
-            cv2.putText(img, header_str, (x + 15, y + 78), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 230, 255), 1, cv2.LINE_AA)
+            header_str = f"WORD SUGGESTIONS for '{active_prefix.upper()}' (Chu L [10 frames]: Chuyen doi | 3 ngon: Chot chon):"
+            cv2.putText(img, header_str, (x + 15, y + 78), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 230, 255), 1, cv2.LINE_AA)
 
             num_sug = len(suggestions)
             gap = 6
@@ -258,16 +259,21 @@ class DashboardUI:
                 btn_x2 = btn_x1 + btn_w
                 self.suggestion_rects.append((btn_x1, btn_y1, btn_x2, btn_y2, word))
 
-                # Button container
-                cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), (45, 54, 72), -1)
-                cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), (75, 95, 125), 1, cv2.LINE_AA)
+                is_active = (i == selected_idx)
+                btn_bg = (25, 75, 45) if is_active else (45, 54, 72)
+                border_col = (0, 255, 150) if is_active else (75, 95, 125)
+                border_th = 2 if is_active else 1
+
+                cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), btn_bg, -1)
+                cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), border_col, border_th, cv2.LINE_AA)
 
                 # Number badge & Word
                 w_disp = word.upper()
-                if len(w_disp) > 6:
-                    w_disp = w_disp[:5] + "."
-                lbl = f"[{i+1}] {w_disp}"
-                cv2.putText(img, lbl, (btn_x1 + 6, btn_y1 + 21), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+                if len(w_disp) > 5:
+                    w_disp = w_disp[:4] + "."
+                lbl = f">[{i+1}]{w_disp}" if is_active else f"[{i+1}] {w_disp}"
+                txt_col = (0, 255, 220) if is_active else (220, 220, 220)
+                cv2.putText(img, lbl, (btn_x1 + 4, btn_y1 + 21), cv2.FONT_HERSHEY_SIMPLEX, 0.40, txt_col, 1, cv2.LINE_AA)
         else:
             if active_prefix:
                 cv2.putText(img, f"WORD SUGGESTIONS: No matching words for prefix '{active_prefix.upper()}'", (x + 15, y + 95), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (140, 140, 150), 1, cv2.LINE_AA)
@@ -276,8 +282,7 @@ class DashboardUI:
 
     def _draw_footer_card(
         self, img: np.ndarray, x: int, y: int, w: int, h: int, show_debug: bool,
-        collect_mode: bool = False, target_char: str = "A", custom_samples_count: int = 0,
-        cnn_enabled: bool = False
+        collect_mode: bool = False, target_char: str = "A", custom_samples_count: int = 0
     ):
         """Draws shortcut badges and footer information."""
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
@@ -288,12 +293,8 @@ class DashboardUI:
         # Line 1 Badges
         target_type = "NUM" if target_char.isdigit() else "LET"
         cv2.putText(img, f"[t] Target: '{target_char}' ({target_type})", (x + 15, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 1, cv2.LINE_AA)
-        cv2.putText(img, f"[r] Save Sample", (x + 175, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
-        cv2.putText(img, f"Samples: {custom_samples_count}", (x + 325, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 50), 1, cv2.LINE_AA)
-        
-        cnn_badge = "[n] CNN: ON" if cnn_enabled else "[n] CNN: OFF"
-        cnn_color = (0, 255, 120) if cnn_enabled else (0, 180, 255)
-        cv2.putText(img, cnn_badge, (x + 440, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, cnn_color, 1, cv2.LINE_AA)
+        cv2.putText(img, f"[r] Save Sample", (x + 200, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
+        cv2.putText(img, f"Samples: {custom_samples_count}", (x + 360, y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 50), 1, cv2.LINE_AA)
 
         # Line 2 Badges
         cv2.putText(img, "[1-5] Word", (x + 15, y + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)

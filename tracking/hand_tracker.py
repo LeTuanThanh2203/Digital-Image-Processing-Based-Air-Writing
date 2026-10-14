@@ -51,25 +51,61 @@ class GestureStabilizer:
 def classify_hand_gesture(hand_landmarks) -> str:
     """
     Nhận diện các cử chỉ điều khiển Air-Writing từ 21 landmarks:
-    1. WRITING: Ngón trỏ duỗi (OPEN), ngón giữa/áp út/út co (CLOSED).
-    2. SPACE: Ngón trỏ & ngón út duỗi (OPEN), ngón giữa & áp út co (CLOSED).
-    3. DELETE: Tất cả 4 ngón trỏ/giữa/áp út/út co (CLOSED - Nắm tay).
-    4. MODE: Ngón trỏ & ngón giữa duỗi (OPEN), ngón áp út & út co (CLOSED - V-Sign).
+    - WRITING: Chỉ 1 ngón trỏ duỗi (ngón cái và 3 ngón còn lại co).
+    - MODE: 2 ngón (V-sign: Ngón trỏ & giữa duỗi, áp út & út co).
+    - SPACE: Ngón trỏ & ngón út duỗi (Rock/Spider-man).
+    - DELETE: Nắm tay hoàn toàn (Tất cả ngón co).
+    
+    CỬ CHỈ ĐIỀU HƯỚNG & CHỌN TỪ GỢI Ý:
+    - CYCLE: Giơ ngón cái + ngón trỏ duỗi vuông góc (Chữ L 👆👈), 3 ngón còn lại co -> Chuyển đổi qua lại giữa các lựa chọn 1 - 5 (~10 frames).
+    - CONFIRM: Giơ 3 ngón (Trỏ + Giữa + Áp út duỗi thẳng 🤟, ngón út co) -> Chốt chọn từ đang được highlight!
+    - IDLE: Xòe cả bàn tay 5 ngón hoặc các tư thế khác -> Trạng thái nghỉ tay an toàn.
     """
+    # Trạng thái mở của 4 ngón dài (y của đầu ngón < y của đốt giữa)
     index_open = hand_landmarks[8].y < hand_landmarks[6].y
     middle_open = hand_landmarks[12].y < hand_landmarks[10].y
     ring_open = hand_landmarks[16].y < hand_landmarks[14].y
     pinky_open = hand_landmarks[20].y < hand_landmarks[18].y
 
-    if index_open and not middle_open and not ring_open and not pinky_open:
-        return "WRITING"
+    # Tính kích thước lòng bàn tay (Wrist 0 -> Middle MCP 9) làm thước đo tỉ lệ
+    palm_size = math.hypot(hand_landmarks[0].x - hand_landmarks[9].x, hand_landmarks[0].y - hand_landmarks[9].y)
+    # Khoảng cách từ đầu ngón cái (4) đến gốc ngón trỏ (5)
+    dist_thumb_index = math.hypot(hand_landmarks[4].x - hand_landmarks[5].x, hand_landmarks[4].y - hand_landmarks[5].y)
+    norm_thumb_dist = dist_thumb_index / (palm_size + 1e-6)
+
+    # Chữ L (CYCLE): Ngón cái mở rộng ra xa lòng bàn tay (norm_thumb_dist > 0.60)
+    # Viết chữ (WRITING): Ngón cái khép/áp vào cạnh bàn tay (norm_thumb_dist < 0.50)
+    thumb_extended = norm_thumb_dist > 0.60
+
+    four_closed = (not index_open) and (not middle_open) and (not ring_open) and (not pinky_open)
+    four_open = index_open and middle_open and ring_open and pinky_open
+
+    # 1. Cử chỉ CONFIRM (3 ngón: Trỏ + Giữa + Áp út duỗi thẳng, ngón út co)
+    if index_open and middle_open and ring_open and not pinky_open:
+        return "CONFIRM"
+
+    # 2. Cử chỉ MODE (2 ngón V-sign: Trỏ + Giữa duỗi, ngón cái không mở rộng)
+    elif index_open and middle_open and not ring_open and not pinky_open and not thumb_extended:
+        return "MODE"
+
+    # 3. Cử chỉ SPACE (Spider-man: Trỏ + Út duỗi, giữa + áp út co)
     elif index_open and pinky_open and not middle_open and not ring_open:
         return "SPACE"
-    elif not index_open and not middle_open and not ring_open and not pinky_open:
+
+    # 4. Cử chỉ CYCLE (Chữ L: Ngón cái mở rộng ngang hoặc lên + ngón trỏ duỗi, 3 ngón còn lại co)
+    elif thumb_extended and index_open and not middle_open and not ring_open and not pinky_open:
+        return "CYCLE"
+
+    # 5. Cử chỉ WRITING (Viết chữ: Chỉ ngón trỏ duỗi, ngón cái khép vào tay)
+    elif index_open and not middle_open and not ring_open and not pinky_open:
+        return "WRITING"
+
+    # 6. Cử chỉ DELETE (Nắm đấm hoàn toàn: cả 4 ngón co và ngón cái không mở rộng)
+    elif four_closed and not thumb_extended:
         return "DELETE"
-    elif index_open and middle_open and not ring_open and not pinky_open:
-        return "MODE"
+
     else:
+        # Xòe 5 ngón hoặc các tư thế khác: IDLE (nghỉ ngơi an toàn, không kích hoạt nhầm)
         return "IDLE"
 
 
@@ -139,7 +175,6 @@ class HandTracker:
                 cv2.circle(frame, (px8_i, py8_i), 10, (0, 255, 255), 2, cv2.LINE_AA)
                 cv2.circle(frame, (px8_i, py8_i), 4, (0, 0, 255), -1, cv2.LINE_AA)
 
-                
                 # Phân loại gesture thô từ landmarks
                 raw_gesture = classify_hand_gesture(hand_landmarks)
 
@@ -147,4 +182,5 @@ class HandTracker:
         stable_gesture = self.stabilizer.update(raw_gesture)
                     
         return frame, stable_gesture, fingertip_pos
+
 
