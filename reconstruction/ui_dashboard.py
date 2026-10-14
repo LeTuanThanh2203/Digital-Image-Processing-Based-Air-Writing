@@ -267,13 +267,21 @@ class DashboardUI:
                 cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), btn_bg, -1)
                 cv2.rectangle(img, (btn_x1, btn_y1), (btn_x2, btn_y2), border_col, border_th, cv2.LINE_AA)
 
-                # Number badge & Word
+                # Number badge & Word (Hiển thị đầy đủ toàn bộ từ, tự động scale font để không bị cắt xén)
                 w_disp = word.upper()
-                if len(w_disp) > 5:
-                    w_disp = w_disp[:4] + "."
                 lbl = f">[{i+1}]{w_disp}" if is_active else f"[{i+1}] {w_disp}"
+
+                font_scale = 0.40
+                max_text_w = btn_w - 6
+                (tw, th), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+                if tw > max_text_w:
+                    font_scale = max(0.26, font_scale * (max_text_w / (tw + 1e-6)))
+                    (tw, th), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+
+                text_x = btn_x1 + max(2, (btn_w - tw) // 2)
+                text_y = btn_y1 + 21
                 txt_col = (0, 255, 220) if is_active else (220, 220, 220)
-                cv2.putText(img, lbl, (btn_x1 + 4, btn_y1 + 21), cv2.FONT_HERSHEY_SIMPLEX, 0.40, txt_col, 1, cv2.LINE_AA)
+                cv2.putText(img, lbl, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, txt_col, 1, cv2.LINE_AA)
         else:
             if active_prefix:
                 cv2.putText(img, f"WORD SUGGESTIONS: No matching words for prefix '{active_prefix.upper()}'", (x + 15, y + 95), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (140, 140, 150), 1, cv2.LINE_AA)
