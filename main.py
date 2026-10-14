@@ -201,6 +201,32 @@ def main():
             # 2. MediaPipe tracking + gesture recognition
             frame, stable_gesture, mapped_fingertip = tracker.process_frame(frame)
 
+            # Word suggestions calculation via Trie
+            current_suggestions = []
+            active_word_prefix = ""
+            if trie is not None and current_mode == "LETTER":
+                active_word_prefix = get_current_word_prefix(recognized_text)
+                if active_word_prefix:
+                    current_suggestions = trie.search_prefix(
+                        active_word_prefix,
+                        limit=getattr(config, 'MAX_WORD_SUGGESTIONS', 5)
+                    )
+            if current_suggestions:
+                active_suggestion_idx = active_suggestion_idx % len(current_suggestions)
+            else:
+                active_suggestion_idx = 0
+
+            # Gesture activation constraints:
+            # 1. When recognized_text is empty, only WRITING and MODE are allowed (disable SPACE, DELETE)
+            if not recognized_text and stable_gesture in ("SPACE", "DELETE"):
+                stable_gesture = "IDLE"
+
+            # 2. CYCLE and CONFIRM only activate when word suggestions are actually available!
+            # After choosing a word, after a space, in NUMBER mode, or when no suggestions exist,
+            # CYCLE and CONFIRM are strictly disabled (treated as IDLE).
+            if not current_suggestions and stable_gesture in ("CYCLE", "CONFIRM"):
+                stable_gesture = "IDLE"
+
             # Log gesture changes (no spam)
             if stable_gesture != prev_gesture:
                 if stable_gesture not in ("IDLE", "NO_HAND"):
@@ -218,21 +244,6 @@ def main():
             if stable_gesture != "CYCLE": cycle_hold_ctr = 0
             if stable_gesture != "CONFIRM": confirm_hold_ctr = 0
             if stable_gesture != "WRITING": pending_resume_ctr = 0
-
-            # Word suggestions calculation via Trie
-            current_suggestions = []
-            active_word_prefix = ""
-            if trie is not None and current_mode == "LETTER":
-                active_word_prefix = get_current_word_prefix(recognized_text)
-                if active_word_prefix:
-                    current_suggestions = trie.search_prefix(
-                        active_word_prefix,
-                        limit=getattr(config, 'MAX_WORD_SUGGESTIONS', 5)
-                    )
-            if current_suggestions:
-                active_suggestion_idx = active_suggestion_idx % len(current_suggestions)
-            else:
-                active_suggestion_idx = 0
 
             # GESTURE CONTROL LOGIC
             gesture_chosen_word = None
@@ -472,7 +483,11 @@ def main():
                 writing_state = STATE_IDLE
                 pending_start = None
                 active_suggestion_idx = 0
-                selection_method = "Cử chỉ CONFIRM (3 ngón)" if gesture_chosen_word else "Bàn phím/Chuột"
+                cycle_hold_ctr = 0
+                confirm_hold_ctr = 0
+                cycle_cooldown = 20
+                confirm_cooldown = 30
+                selection_method = "CONFIRM Gesture (3 Fingers)" if gesture_chosen_word else "Keyboard/Mouse"
                 print(f"[Word Suggestion - {selection_method}] Selected '{chosen_word.upper()}' -> New Text: '{recognized_text}'")
 
             elif key == ord('q'):
@@ -528,13 +543,18 @@ def main():
                 print(f"[Debug] CNN debug window: {'ON' if show_cnn_debug else 'OFF'}")
             elif key == ord('c'):
                 trajectory_mgr.clear()
+                canvas_mgr.update_canvas([])
                 last_recognized_char = None
                 last_confidence = 0.0
                 recognized_text = ""
                 writing_state = STATE_IDLE
                 pending_start = None
+                active_suggestion_idx = 0
                 space_hold_ctr = 0
-                print("[System] Canvas cleared.")
+                delete_hold_ctr = 0
+                cycle_hold_ctr = 0
+                confirm_hold_ctr = 0
+                print("[System] All text and canvas cleared. Only WRITING and MODE are active.")
             elif key == ord('s'):
                 canvas_mgr.save_image()
 

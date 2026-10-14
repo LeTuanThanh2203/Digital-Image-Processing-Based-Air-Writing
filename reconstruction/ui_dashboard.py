@@ -214,18 +214,27 @@ class DashboardUI:
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BG, -1)
         cv2.rectangle(img, (x, y), (x + w, y + h), self.CARD_BORDER, 1, cv2.LINE_AA)
 
-        # 1. Recognized Sentence
-        display_text = text if text else "(Write on camera...)"
-        if len(display_text) > 22:
-            display_text = "..." + display_text[-20:]
+        # 1. Recognized Sentence with clean space visualization (" _ ")
+        if text:
+            # Replace each space with " _ " for clear, elegant visualization
+            display_text = text.replace(' ', ' _ ')
+            if len(display_text) > 34:
+                display_text = "..." + display_text[-31:]
+        else:
+            display_text = "(Ready. Start writing on camera...)"
 
-        cv2.putText(img, "RECOGNIZED TEXT:", (x + 15, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
-        cv2.putText(img, display_text, (x + 15, y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (0, 255, 255), 2, cv2.LINE_AA)
+        header_str_text = "RECOGNIZED TEXT:"
+        cv2.putText(img, header_str_text, (x + 15, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.TEXT_SECONDARY, 1, cv2.LINE_AA)
+        cv2.putText(img, display_text, (x + 15, y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.68, (0, 255, 255), 2, cv2.LINE_AA)
 
         # 2. Last Character & Confidence Bar
         if last_char is not None:
-            char_str = f"Last: '{last_char}'"
-            conf_str = f"{confidence:.1f}%"
+            if last_char == " " or last_char == "SPACE":
+                char_str = "Last: [SPACE]"
+                conf_str = "100%"
+            else:
+                char_str = f"Last: '{last_char}'"
+                conf_str = f"{confidence:.1f}%"
             cv2.putText(img, char_str, (x + 360, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 2, cv2.LINE_AA)
             cv2.putText(img, conf_str, (x + 480, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 2, cv2.LINE_AA)
 
@@ -244,7 +253,7 @@ class DashboardUI:
         # 3. Word Suggestions (Trie Autocompletion)
         self.suggestion_rects.clear()
         if suggestions and len(suggestions) > 0:
-            header_str = f"WORD SUGGESTIONS for '{active_prefix.upper()}' (Chu L [10 frames]: Chuyen doi | 3 ngon: Chot chon):"
+            header_str = f"WORD SUGGESTIONS for '{active_prefix.upper()}':"
             cv2.putText(img, header_str, (x + 15, y + 78), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 230, 255), 1, cv2.LINE_AA)
 
             num_sug = len(suggestions)
