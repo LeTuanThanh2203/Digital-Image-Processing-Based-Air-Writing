@@ -1,5 +1,6 @@
 # trajectory/trajectory_manager.py
 import math
+# pyrefly: ignore [missing-import]
 import numpy as np
 from .smoothing import apply_simple_moving_average, filter_coordinate_jumps
 
