@@ -130,7 +130,8 @@ def main():
                     clicked_word_holder[0] = word
 
         window_name = "Air-Writing System (Dual-Panel Dashboard)"
-        cv2.namedWindow(window_name)
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 1280, 720)
         cv2.setMouseCallback(window_name, on_mouse_click)
 
         # CNN + Custom Dataset Hybrid Classifier (load once)
@@ -427,6 +428,13 @@ def main():
 
             custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
 
+            # Dynamic responsive window dimensions
+            win_rect = cv2.getWindowImageRect(window_name)
+            if win_rect is not None and len(win_rect) >= 4 and win_rect[2] > 600 and win_rect[3] > 400:
+                cur_win_w, cur_win_h = int(win_rect[2]), int(win_rect[3])
+            else:
+                cur_win_w, cur_win_h = 1280, 720
+
             master_dashboard = dashboard_ui.create_dashboard(
                 camera_frame=frame,
                 canvas_img=current_canvas,
@@ -444,7 +452,9 @@ def main():
                 custom_samples_count=custom_count,
                 suggestions=current_suggestions,
                 active_prefix=active_word_prefix,
-                selected_idx=active_suggestion_idx
+                selected_idx=active_suggestion_idx,
+                width=cur_win_w,
+                height=cur_win_h
             )
 
             cv2.imshow(window_name, master_dashboard)
