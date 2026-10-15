@@ -85,7 +85,8 @@ Digital-Image-Processing-Based-Air-Writing/
 ├── requirements.txt            # Danh sách thư viện cần cài đặt
 ├── hand_landmarker.task        # Model tracking MediaPipe Hand Landmarker
 ├── models/
-│   └── airwriting_cnn.keras    # Model CNN nhận dạng chữ viết
+│   ├── airwriting_letters_cnn.keras  # Model CNN nhận dạng chữ cái (A-Z)
+│   └── airwriting_digits_cnn.keras   # Model CNN nhận dạng chữ số (0-9)
 ├── tracking/
 │   └── hand_tracker.py         # Theo dõi khớp bàn tay & nhận diện gesture
 ├── trajectory/

@@ -33,7 +33,10 @@ MIN_TRAJECTORY_POINTS = 8          # Minimum trajectory points before CNN is cal
 
 # --- CNN Recognition Configuration ---
 from pathlib import Path
-MODEL_PATH = Path(__file__).resolve().parent / "models" / "airwriting_cnn.keras"
+MODELS_DIR = Path(__file__).resolve().parent / "models"
+LETTERS_MODEL_PATH = MODELS_DIR / "airwriting_letters_cnn.keras"
+DIGITS_MODEL_PATH = MODELS_DIR / "airwriting_digits_cnn.keras"
+MODEL_PATH = MODELS_DIR / "airwriting_cnn.keras"  # Fallback cho model gộp 36 lớp (nếu có)
 CNN_INPUT_SIZE = (64, 64)
 CNN_NUM_CLASSES = 36
 SHOW_RECOGNITION_DEBUG = False     # Bật/tắt hiển thị cửa sổ debug 64x64 CNN input

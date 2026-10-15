@@ -3,7 +3,7 @@ import os
 import zipfile
 import tempfile
 from pathlib import Path
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, Dict
 import cv2
 import numpy as np
 
@@ -81,23 +81,101 @@ class NumPyCNNModel:
 
 class CharacterClassifier:
     """
-    Module nhận diện chữ cái tiếng Anh (A-Z) từ ảnh Canvas Air-Writing 
-    sử dụng mô hình CNN được huấn luyện trên bộ dữ liệu 6DMG (input 64x64x1).
+    Module nhận diện chữ cái tiếng Anh (A-Z) và chữ số (0-9) từ ảnh Canvas Air-Writing 
+    sử dụng mô hình CNN. Hỗ trợ tải đồng thời 2 file .keras riêng biệt (chữ và số)
+    hoặc 1 file mô hình gộp.
     """
-    def __init__(self, model_path: Union[str, Path], class_labels: Optional[list] = None):
-        self.model_path = Path(model_path)
+    def __init__(
+        self,
+        model_path: Optional[Union[str, Path]] = None,
+        letters_model_path: Optional[Union[str, Path]] = None,
+        digits_model_path: Optional[Union[str, Path]] = None,
+        class_labels: Optional[list] = None
+    ):
         self.custom_labels = class_labels
-        self.class_labels = []
-        
-        # 1. Kiểm tra sự tồn tại của file model
-        if not self.model_path.exists():
-            raise FileNotFoundError(
-                f"[CNN Classifier Error] Không tìm thấy file mô hình tại: '{self.model_path}'. "
-                "Vui lòng lưu file mô hình đã train vào thư mục 'models/airwriting_cnn.keras'."
-            )
-            
-        # 2. Tải mô hình: Ưu tiên Keras/TensorFlow, tự động dùng NumPy engine nếu không có TF
+        self.is_dual_mode = False
+        self.letters_classifier: Optional['CharacterClassifier'] = None
+        self.digits_classifier: Optional['CharacterClassifier'] = None
         self.model = None
+        self.model_path = None
+        self.class_labels = []
+
+        models_dir = Path(__file__).resolve().parent.parent / "models"
+
+        # 1. Nếu người dùng truyền rõ letters_model_path hoặc digits_model_path
+        if letters_model_path is not None or digits_model_path is not None:
+            self._init_dual_models(letters_model_path, digits_model_path)
+            return
+
+        # 2. Xác định đường dẫn model_path
+        target_path = Path(model_path) if model_path is not None else (models_dir / "airwriting_cnn.keras")
+
+        # 3. Nếu target_path tồn tại thực tế: Tải mô hình đơn
+        if target_path.exists():
+            self._init_single_model(target_path)
+            return
+
+        # 4. Nếu target_path không tồn tại: Tự động tìm 2 model riêng biệt trong thư mục models/
+        default_letters = models_dir / "airwriting_letters_cnn.keras"
+        default_digits = models_dir / "airwriting_digits_cnn.keras"
+
+        if default_letters.exists() or default_digits.exists():
+            print(f"[CNN Classifier] File '{target_path.name}' not found. "
+                  f"Auto-activating Dual Models from 'models/': "
+                  f"{'Letters OK' if default_letters.exists() else 'Letters Missing'}, "
+                  f"{'Digits OK' if default_digits.exists() else 'Digits Missing'}.")
+            self._init_dual_models(
+                default_letters if default_letters.exists() else None,
+                default_digits if default_digits.exists() else None
+            )
+            return
+
+        # 5. Nếu không tìm thấy bất kỳ model nào
+        raise FileNotFoundError(
+            f"[CNN Classifier Error] Model file not found at '{target_path}'. "
+            f"Please place 'airwriting_letters_cnn.keras' and 'airwriting_digits_cnn.keras' into '{models_dir}'."
+        )
+
+    def _init_dual_models(
+        self,
+        letters_path: Optional[Union[str, Path]],
+        digits_path: Optional[Union[str, Path]]
+    ):
+        """Khởi tạo chế độ Dual Models với 2 classifier độc lập cho chữ cái và chữ số."""
+        self.is_dual_mode = True
+        self.class_labels = []
+
+        if letters_path is not None:
+            lp = Path(letters_path)
+            if lp.exists():
+                self.letters_classifier = CharacterClassifier(model_path=lp)
+                self.class_labels.extend(self.letters_classifier.class_labels)
+            else:
+                print(f"[Warning] Letters model file not found at: {lp}")
+
+        if digits_path is not None:
+            dp = Path(digits_path)
+            if dp.exists():
+                self.digits_classifier = CharacterClassifier(model_path=dp)
+                for lbl in self.digits_classifier.class_labels:
+                    if lbl not in self.class_labels:
+                        self.class_labels.append(lbl)
+            else:
+                print(f"[Warning] Digits model file not found at: {dp}")
+
+        if not self.letters_classifier and not self.digits_classifier:
+            raise FileNotFoundError("[CNN Classifier Error] Neither letters nor digits model files could be found.")
+
+        print(f"[CNN Classifier] Dual Models initialized: "
+              f"Letters={self.letters_classifier is not None} (26 cls), "
+              f"Digits={self.digits_classifier is not None} (10 cls). Total {len(self.class_labels)} classes.")
+
+    def _init_single_model(self, model_path: Path):
+        """Khởi tạo một model duy nhất từ đường dẫn cụ thể."""
+        self.model_path = model_path
+        self.is_dual_mode = False
+
+        # Tải mô hình: Ưu tiên Keras/TensorFlow, tự động dùng NumPy engine nếu không có TF
         try:
             import keras
             self.model = keras.models.load_model(str(self.model_path))
@@ -108,7 +186,6 @@ class CharacterClassifier:
                 self.model = tf.keras.models.load_model(str(self.model_path))
                 print(f"[CNN Classifier] Loaded CNN model using TensorFlow from '{self.model_path}'.")
             except Exception:
-                # Dùng NumPy + HDF5 fallback engine siêu nhẹ
                 try:
                     self.model = NumPyCNNModel(self.model_path)
                     print(f"[CNN Classifier] Loaded CNN model using NumPy Engine from '{self.model_path}'.")
@@ -116,10 +193,10 @@ class CharacterClassifier:
                     raise RuntimeError(
                         f"[CNN Classifier Error] Failed to load model from '{self.model_path}': {e}"
                     )
-            
-        # 3. Kiểm tra tính tương thích cấu trúc Input/Output và khởi tạo danh sách nhãn (class_labels)
+
+        # Kiểm tra tính tương thích cấu trúc Input/Output và khởi tạo danh sách nhãn
         self._validate_model_shapes()
-        
+
     def _validate_model_shapes(self):
         """Kiểm tra shape của input/output và tự động ánh xạ danh sách nhãn (0-9, A-Z)."""
         input_shape = self.model.input_shape
@@ -215,6 +292,47 @@ class CharacterClassifier:
         
         return tensor, resized
 
+    def get_probabilities(self, input_data: np.ndarray, mode: Optional[str] = None) -> Dict[str, float]:
+        """
+        Trả về dictionary xác suất {nhãn: phần trăm [0.0 - 100.0]} cho các nhãn phù hợp với mode.
+        """
+        probs_dict: Dict[str, float] = {}
+
+        if self.is_dual_mode:
+            if mode == "LETTER":
+                if self.letters_classifier:
+                    return self.letters_classifier.get_probabilities(input_data, mode=mode)
+                return {}
+            elif mode == "NUMBER":
+                if self.digits_classifier:
+                    return self.digits_classifier.get_probabilities(input_data, mode=mode)
+                return {}
+            else:
+                if self.letters_classifier:
+                    probs_dict.update(self.letters_classifier.get_probabilities(input_data, mode="LETTER"))
+                if self.digits_classifier:
+                    probs_dict.update(self.digits_classifier.get_probabilities(input_data, mode="NUMBER"))
+                return probs_dict
+
+        tensor, _ = self.preprocess(input_data)
+        if tensor is None or self.model is None:
+            return {}
+
+        try:
+            preds = self.model.predict(tensor, verbose=0)[0]
+            for i, p in enumerate(preds):
+                if i < len(self.class_labels):
+                    lbl = self.class_labels[i]
+                    if mode == "LETTER" and not lbl.isalpha():
+                        continue
+                    if mode == "NUMBER" and not lbl.isdigit():
+                        continue
+                    probs_dict[lbl] = round(float(p) * 100.0, 2)
+        except Exception as e:
+            print(f"[CNN Classifier Error] Lỗi trong get_probabilities: {e}")
+
+        return probs_dict
+
     def predict(
         self,
         input_data: np.ndarray,
@@ -223,33 +341,75 @@ class CharacterClassifier:
         traj_stats: Optional[dict] = None
     ) -> Tuple[Optional[str], float, dict]:
         """
-        Dự đoán chữ cái từ ảnh Canvas hoặc ảnh 64x64 nhị phân kèm thông tin kiểm định đa tín hiệu (Multi-Signal Validation).
+        Dự đoán chữ cái hoặc chữ số từ ảnh Canvas hoặc ảnh 64x64 nhị phân kèm kiểm định đa tín hiệu.
         
         Trả về:
-            - character: Ký tự được dự đoán ('A'-'Z', '0'-'9'), "UNKNOWN" nếu bị từ chối do dị dạng nghiêm trọng, hoặc None nếu rỗng.
+            - character: Ký tự được dự đoán ('A'-'Z', '0'-'9'), "UNKNOWN" nếu bị từ chối, hoặc None nếu rỗng.
             - confidence: Độ tin cậy Top-1 phần trăm (ví dụ: 96.72).
-            - info_dict: Dict chứa chi tiết (top1_char, top1_conf, top2_char, top2_conf, margin, is_unknown, reject_reason).
+            - info_dict: Dict chứa chi tiết (top1_char, top1_conf, top2_char, top2_conf, margin, is_unknown, reject_reason, probabilities).
         """
-        tensor, _ = self.preprocess(input_data)
-        
         default_info = {
             'top1_char': None, 'top1_conf': 0.0,
             'top2_char': None, 'top2_conf': 0.0,
             'margin': 0.0, 'is_unknown': False,
-            'reject_reason': None
+            'reject_reason': None,
+            'probabilities': {}
         }
 
+        # 1. Nếu là Dual Mode: Điều hướng sang model chữ cái hoặc model chữ số
+        if self.is_dual_mode:
+            if mode == "LETTER":
+                if self.letters_classifier:
+                    return self.letters_classifier.predict(
+                        input_data, mode="LETTER",
+                        confidence_threshold=confidence_threshold, traj_stats=traj_stats
+                    )
+                return None, 0.0, default_info
+            elif mode == "NUMBER":
+                if self.digits_classifier:
+                    return self.digits_classifier.predict(
+                        input_data, mode="NUMBER",
+                        confidence_threshold=confidence_threshold, traj_stats=traj_stats
+                    )
+                return None, 0.0, default_info
+            else:
+                # Không chỉ định mode: Chạy cả 2 model và chọn kết quả có confidence cao hơn
+                char_l, conf_l, info_l = (None, 0.0, default_info)
+                char_d, conf_d, info_d = (None, 0.0, default_info)
+                if self.letters_classifier:
+                    char_l, conf_l, info_l = self.letters_classifier.predict(
+                        input_data, mode="LETTER",
+                        confidence_threshold=confidence_threshold, traj_stats=traj_stats
+                    )
+                if self.digits_classifier:
+                    char_d, conf_d, info_d = self.digits_classifier.predict(
+                        input_data, mode="NUMBER",
+                        confidence_threshold=confidence_threshold, traj_stats=traj_stats
+                    )
+
+                if conf_d > conf_l and char_d is not None and char_d != "UNKNOWN":
+                    chosen_char, chosen_conf, chosen_info = char_d, conf_d, info_d
+                elif char_l is not None and char_l != "UNKNOWN":
+                    chosen_char, chosen_conf, chosen_info = char_l, conf_l, info_l
+                else:
+                    chosen_char, chosen_conf, chosen_info = (char_d, conf_d, info_d) if conf_d > conf_l else (char_l, conf_l, info_l)
+
+                merged_probs = {}
+                merged_probs.update(info_l.get('probabilities', {}))
+                merged_probs.update(info_d.get('probabilities', {}))
+                chosen_info['probabilities'] = merged_probs
+                return chosen_char, chosen_conf, chosen_info
+
+        # 2. Xử lý Single Model
+        tensor, _ = self.preprocess(input_data)
         if tensor is None:
             return None, 0.0, default_info
             
         try:
-            # 1. Chạy dự đoán từ CNN model
             preds = self.model.predict(tensor, verbose=0)[0]
-            
-            # 2. Sắp xếp thứ tự xác suất dự đoán giảm dần
             sorted_indices = np.argsort(preds)[::-1]
 
-            # 3. Lọc danh sách phân lớp theo mode ("LETTER" hoặc "NUMBER")
+            # Lọc danh sách phân lớp theo mode ("LETTER" hoặc "NUMBER")
             if mode is not None and len(self.class_labels) > 0:
                 if mode == "LETTER":
                     valid_indices = [i for i in sorted_indices if self.class_labels[i].isalpha()]
@@ -263,7 +423,6 @@ class CharacterClassifier:
             if not valid_indices:
                 valid_indices = list(sorted_indices)
 
-            # 4. Trích xuất Top-1 và Top-2
             top1_idx = valid_indices[0]
             top2_idx = valid_indices[1] if len(valid_indices) > 1 else top1_idx
 
@@ -274,6 +433,11 @@ class CharacterClassifier:
             top2_conf = round(float(preds[top2_idx]) * 100.0, 2)
             margin = round(top1_conf - top2_conf, 2)
 
+            probs_dict = {
+                self.class_labels[i]: round(float(preds[i]) * 100.0, 2)
+                for i in range(len(self.class_labels))
+            }
+
             info = {
                 'top1_char': top1_char,
                 'top1_conf': top1_conf,
@@ -281,11 +445,11 @@ class CharacterClassifier:
                 'top2_conf': top2_conf,
                 'margin': margin,
                 'is_unknown': False,
-                'reject_reason': None
+                'reject_reason': None,
+                'probabilities': probs_dict
             }
 
-            # 5. Kiểm tra Holistic Multi-Signal Validation (Đánh giá đa tín hiệu)
-            # Chỉ coi là UNKNOWN khi CÓ SỰ KẾT HỢP giữa dị dạng hình học/tracking nghiêm trọng VÀ độ nghi ngờ dự đoán.
+            # Holistic Multi-Signal Validation
             is_severe_anomaly = False
             reason = None
 
@@ -293,7 +457,6 @@ class CharacterClassifier:
                 ratio_jump = traj_stats.get('ratio_max_to_median', 1.0)
                 aspect_ratio = traj_stats.get('aspect_ratio', 1.0)
 
-                # Cờ bất thường nghiêm trọng: Jump cực lớn (> 12x median) hoặc vệt kéo dài biến dạng (> 8.0 aspect ratio)
                 if ratio_jump > 12.0 and (margin < 30.0 or top1_conf < 50.0):
                     is_severe_anomaly = True
                     reason = f"Extreme tracking jump glitch (ratio={ratio_jump:.1f}x > 12x)"
@@ -301,7 +464,6 @@ class CharacterClassifier:
                     is_severe_anomaly = True
                     reason = f"Extreme aspect ratio distortion ({aspect_ratio:.1f} > 8.0)"
 
-            # Kiểm tra thêm ngưỡng tin cậy cơ bản
             if top1_conf < confidence_threshold:
                 is_severe_anomaly = True
                 reason = f"Low confidence ({top1_conf:.1f}% < threshold {confidence_threshold}%)"
@@ -316,5 +478,6 @@ class CharacterClassifier:
         except Exception as e:
             print(f"[CNN Classifier Error] Lỗi trong quá trình predict: {e}")
             return None, 0.0, default_info
+
 
 

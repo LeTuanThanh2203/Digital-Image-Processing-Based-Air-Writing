@@ -59,18 +59,24 @@ class HybridDatasetClassifier:
 
     def __init__(
         self,
-        base_model_path: Union[str, Path],
+        base_model_path: Optional[Union[str, Path]] = None,
+        letters_model_path: Optional[Union[str, Path]] = None,
+        digits_model_path: Optional[Union[str, Path]] = None,
         custom_dataset_dir: Optional[Union[str, Path]] = None,
         class_labels: Optional[list] = None
     ):
-        # Khởi tạo mô hình CNN base
+        # Khởi tạo mô hình CNN base (hỗ trợ mô hình chữ, mô hình số riêng biệt hoặc mô hình gộp)
         self.base_classifier = None
         try:
-            self.base_classifier = CharacterClassifier(base_model_path, class_labels=class_labels)
+            self.base_classifier = CharacterClassifier(
+                model_path=base_model_path,
+                letters_model_path=letters_model_path,
+                digits_model_path=digits_model_path,
+                class_labels=class_labels
+            )
+            print("[Classifier Mode] >> Hybrid Classifier active: 70% Custom Dataset DIP SSIM + 30% Base CNN. <<")
         except Exception as e:
             print(f"[Notice] Base CNN classifier not loaded ({e}).")
-
-        print("[Classifier Mode] >> Hybrid Classifier active: 70% Custom Dataset DIP SSIM + 30% Base CNN. <<")
 
         if custom_dataset_dir is None:
             self.custom_dataset_dir = DEFAULT_CUSTOM_DATASET_DIR
@@ -276,25 +282,15 @@ class HybridDatasetClassifier:
             if not valid_labels:
                 valid_labels = [str(i) for i in range(10)]
 
-        tensor, _ = self.base_classifier.preprocess(input_data)
-        base_preds = None
-        if tensor is not None and hasattr(self.base_classifier, 'model') and self.base_classifier.model is not None:
-            try:
-                base_preds = self.base_classifier.model.predict(tensor, verbose=0)[0]
-            except Exception:
-                base_preds = None
+        base_probs = self.base_classifier.get_probabilities(input_data, mode=mode)
 
         hybrid_scores: Dict[str, float] = {}
         for lbl in valid_labels:
-            base_conf = 0.0
-            if base_preds is not None and lbl in self.base_classifier.class_labels:
-                idx = self.base_classifier.class_labels.index(lbl)
-                base_conf = float(base_preds[idx]) * 100.0
-            
+            base_conf = base_probs.get(lbl, 0.0)
             c_ssim = custom_scores.get(lbl, 0.0)
             c_conf = c_ssim * 100.0
             
-            score = weight_custom * c_conf + weight_base * base_conf if base_preds is not None else c_conf
+            score = weight_custom * c_conf + weight_base * base_conf if base_probs else c_conf
 
             if lbl == best_custom_label and c_ssim >= 0.50:
                 score = max(c_conf, score)
@@ -318,5 +314,27 @@ class HybridDatasetClassifier:
         info['hybrid_boosted'] = True
         info['is_unknown'] = False
         info['reject_reason'] = None
+
+        # Holistic Multi-Signal Validation
+        is_severe_anomaly = False
+        reason = None
+        if traj_stats is not None:
+            ratio_jump = traj_stats.get('ratio_max_to_median', 1.0)
+            aspect_ratio = traj_stats.get('aspect_ratio', 1.0)
+            if ratio_jump > 12.0 and (info['margin'] < 30.0 or top1_conf < 50.0):
+                is_severe_anomaly = True
+                reason = f"Extreme tracking jump glitch (ratio={ratio_jump:.1f}x > 12x)"
+            elif aspect_ratio > 8.0 and (info['margin'] < 30.0 or top1_conf < 50.0):
+                is_severe_anomaly = True
+                reason = f"Extreme aspect ratio distortion ({aspect_ratio:.1f} > 8.0)"
+
+        if top1_conf < confidence_threshold:
+            is_severe_anomaly = True
+            reason = f"Low confidence ({top1_conf:.1f}% < threshold {confidence_threshold}%)"
+
+        if is_severe_anomaly:
+            info['is_unknown'] = True
+            info['reject_reason'] = reason
+            return "UNKNOWN", top1_conf, info
 
         return top1_char, top1_conf, info

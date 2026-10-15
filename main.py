@@ -137,13 +137,15 @@ def main():
         classifier = None
         try:
             classifier = HybridDatasetClassifier(
-                config.MODEL_PATH,
+                letters_model_path=config.LETTERS_MODEL_PATH,
+                digits_model_path=config.DIGITS_MODEL_PATH,
+                base_model_path=config.MODEL_PATH if config.MODEL_PATH.exists() else None,
                 class_labels=config.CLASS_LABELS
             )
         except FileNotFoundError as e:
             print(f"[Warning] {e}")
             print("[Notice] System running in tracking-only mode. "
-                  "Load model to 'models/airwriting_cnn.keras' to enable CNN.")
+                  "Place 'airwriting_letters_cnn.keras' and 'airwriting_digits_cnn.keras' in 'models/' to enable CNN.")
         except Exception as e:
             print(f"[Error] Cannot init Hybrid Classifier: {e}")
 
