@@ -1,4 +1,18 @@
 # main.py
+import sys
+import os
+import ctypes
+
+# Enable Windows High-DPI Awareness (Per-Monitor v2) to prevent Windows DWM from blurring the window
+if sys.platform.startswith("win"):
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 import cv2
 import math
 import time
@@ -131,7 +145,7 @@ def main():
 
         window_name = "Air-Writing System (Dual-Panel Dashboard)"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 1280, 720)
+        cv2.resizeWindow(window_name, 1600, 900)
         cv2.setMouseCallback(window_name, on_mouse_click)
 
         # CNN + Custom Dataset Hybrid Classifier (load once)
@@ -428,12 +442,21 @@ def main():
 
             custom_count = len(classifier.custom_samples.get(target_char, [])) if classifier else 0
 
-            # Dynamic responsive window dimensions
-            win_rect = cv2.getWindowImageRect(window_name)
-            if win_rect is not None and len(win_rect) >= 4 and win_rect[2] > 600 and win_rect[3] > 400:
-                cur_win_w, cur_win_h = int(win_rect[2]), int(win_rect[3])
-            else:
-                cur_win_w, cur_win_h = 1280, 720
+            # Safely check if user closed the window ('X' button)
+            try:
+                if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            except Exception:
+                break
+
+            # Dynamic responsive window dimensions with safe exception handling
+            cur_win_w, cur_win_h = 1600, 900
+            try:
+                win_rect = cv2.getWindowImageRect(window_name)
+                if win_rect is not None and len(win_rect) >= 4 and win_rect[2] > 600 and win_rect[3] > 400:
+                    cur_win_w, cur_win_h = int(win_rect[2]), int(win_rect[3])
+            except Exception:
+                pass
 
             master_dashboard = dashboard_ui.create_dashboard(
                 camera_frame=frame,
