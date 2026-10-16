@@ -34,11 +34,14 @@ Hệ thống viết chữ trên không thời gian thực (Real-time Air Writing
 
 ### 2. Cài đặt thư viện
 
-Mở Terminal / PowerShell tại thư mục dự án và chạy:
+Mở Terminal / PowerShell tại thư mục dự án và chọn **1 trong 2 cách** sau:
 
+#### Cách 1: Sử dụng Python chuẩn (Khuyên dùng)
 ```bash
 # Bước 1: Tạo môi trường ảo
-python -m venv .venv
+# Trên Windows (dùng 'py' launcher để tránh xung đột nếu máy có cài MSYS2/MinGW):
+py -m venv .venv
+# Hoặc: python -m venv .venv
 
 # Bước 2: Kích hoạt môi trường ảo
 # Trên Windows (PowerShell / CMD):
@@ -50,12 +53,20 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-*(Nếu sử dụng trình quản lý gói `uv`, bạn chỉ cần chạy lệnh `uv sync`)*
+#### Cách 2: Sử dụng trình quản lý gói  `uv` (Nhanh nhất)
+```bash
+# Tự động tạo venv và cài đặt toàn bộ thư viện chỉ trong 2 giây:
+uv sync
+```
 
 ### 3. Khởi chạy chương trình
 
 ```bash
+# Chạy trực tiếp sau khi kích hoạt venv:
 python main.py
+
+# Hoặc chạy không cần kích hoạt venv (nếu dùng uv):
+uv run python main.py
 ```
 
 > **Lưu ý:** Hệ thống đã tích hợp sẵn **NumPy CNN Engine**, tự động đọc weights từ file `.keras` và suy luận bằng `numpy` + `h5py`. Bạn **hoàn toàn không cần cài đặt TensorFlow hay Keras**.
